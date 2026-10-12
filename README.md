@@ -50,7 +50,9 @@ system language.
   ```
 
 **Update**: `uv tool upgrade rumo-cli` (or `pipx upgrade rumo-cli`, `brew upgrade rumo`), and
-`/plugin marketplace update rumo` in Claude Code.
+`/plugin marketplace update rumo` in Claude Code, then `/reload-plugins` in sessions already open.
+To get new plugin versions on their own, turn on auto-update for the `rumo` marketplace in `/plugin`
+(Marketplaces tab); the `rumo` command updates with your package manager.
 
 **Uninstall**: `/plugin uninstall rumo@rumo`, then `uv tool uninstall rumo-cli` (or
 `pipx uninstall rumo-cli`, `brew uninstall rumo`). Your items in `~/rumo/` are never touched.
@@ -99,8 +101,15 @@ applies it only if you agree.
 
 Steps are the heart of an item: while a session is linked, the agent checks off what got done, adds
 what came up and keeps the next action as the first open step, after every response in which work
-happened. Left off is one line and Context at most three. `/clear` starts a new, unlinked session;
-`claude --resume <id>` picks the old one up again.
+happened. If a turn did work and no linked item changed, the plugin reminds the agent before the turn
+ends. Open steps are never deleted unless you ask, so half-done work stays in Now. One session can
+follow several topics: when you start something no linked item covers, the agent asks once whether to
+track it as a new item, add it as a step, or leave it out. Left off is one line and Context at most
+three. `/clear` starts a new, unlinked session; `claude --resume <id>` picks the old one up again.
+
+In a session without an item, once it edits files, the agent asks whether to track it. The first time
+it also asks whether to keep asking in future sessions (`ask_to_track` in the config). If you say no,
+it reminds you that the option exists every 15 days or 15 sessions.
 
 ## Item format
 
@@ -144,14 +153,15 @@ folder = "~/rumo"
 language = "pt-BR"     # language of the content the agent writes; defaults to your system language
 tags = ["bug", "feature", "refactor", "research", "spike", "review",
         "infra", "deploy", "meeting", "docs", "support", "tech-debt"]
+ask_to_track = true    # offer rumo in agent sessions without an item; unset until you first answer
 
 [groups.auth]
 name = "Auth migration"
 color = "blue"         # blue, green, yellow, orange, red, magenta, purple, cyan
 ```
 
-Groups appear in the order of this file in every view. The last view is remembered in
-`state.json`, next to `config.toml`.
+Groups appear in the order of this file in every view. The last view, and when the agent last
+asked about tracking, are remembered in `state.json`, next to `config.toml`.
 
 `RUMO_DIR` and `RUMO_CONFIG` override the folder and the config path.
 

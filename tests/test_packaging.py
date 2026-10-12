@@ -24,8 +24,11 @@ class PackagingTest(unittest.TestCase):
         skill = (ROOT / "skills" / "rumo" / "SKILL.md").read_text(encoding="utf-8")
         self.assertRegex(skill, r"(?m)^name: rumo$")
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-        command = hooks["UserPromptSubmit"][0]["hooks"][0]["command"]
-        self.assertIn("rumo hook", command)
+        for event in ("UserPromptSubmit", "Stop"):
+            command = hooks[event][0]["hooks"][0]["command"]
+            self.assertIn("rumo hook", command, event)
+            # An old `rumo` without this event, or none at all, must never block the session.
+            self.assertTrue(command.endswith("|| true"), event)
 
     def test_homebrew_formula_ignores_the_users_global_python_packages(self):
         # A legacy `*-nspkg.pth` in Homebrew Python's global site-packages (left by packages installed

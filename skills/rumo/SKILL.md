@@ -44,12 +44,13 @@ conversation so far.
   3. `link [item]`: continue an existing item in this session
   4. `now`: list what is in progress, with the next step of each
   5. `find <text>`: search past, current and future items
-- Session **linked** (name the item):
+- Session **linked** (name the item or items):
   1. `status`: show Left off and the next steps
   2. `step <text>`: add a step
-  3. `park [reason]`: pause it with an accurate Left off and stop updating it here
-  4. `done`: finish it (checks the steps, asks you first)
-  5. `unlink`: stop updating it from this session
+  3. `new`: track another topic of this session as its own item (both stay linked)
+  4. `park [reason]`: pause it with an accurate Left off and stop updating it here
+  5. `done`: finish it (checks the steps, asks you first)
+  6. `unlink`: stop updating it from this session
 
 ## 2. Subcommands
 
@@ -125,13 +126,35 @@ else stays short.
   agent does; `[manual]` is work the user or someone else does (a review, a deploy, a decision).
 - **The first open step is the next action.** Reorder when priorities change.
 - **Keep the Steps current while linked.** After every response in which work happened: check what
-  got done, add a step for whatever came up or was left for later, reword steps that changed, drop
-  steps the user abandoned. The hook repeats the open steps on every prompt so you can check them off.
+  got done, add a step for whatever came up or was left for later, reword steps that changed. The
+  hook repeats the open steps on every prompt so you can check them off, and nudges you at the end
+  of a turn whose work reached no linked item.
+- **Never delete an open step** unless the user explicitly asks to drop it. Open steps are what keeps
+  half-done work from being forgotten; moving on to something else never closes or deletes them.
 - **Left off is one line**: where it stands or what blocks it. Not a copy of the next step.
 - **Context is at most 3 short lines**: what this is and why it matters. No history, no logs, no
   list of what was done (the checked steps are that), no commands. A link to a longer document is
   fine.
 - Conversation-only replies need no update. Never add sections.
+
+## Several topics in one session
+
+A session can be linked to several items, and keeps all of them up to date.
+
+- Put each change in the item it belongs to.
+- When the user starts work that belongs to none of the linked items, ask once, in one line at the
+  end of the response: track it as a **new item** (do what `new` does, including the search for
+  similar items; this session links to it too), add it as a **step** to one of the linked items, or
+  **not track** it. Do not ask again about that topic after a "no".
+- Items the session moves away from stay `doing` and linked, with their open steps, so they show in
+  Now until the user parks or finishes them. Never park or close one unless the user asks.
+
+## Sessions without an item
+
+In Claude Code, when a session without a linked item edits files, the hook asks you to offer rumo
+once. The first time on a machine it also asks whether to keep offering in future sessions: record
+the answer with `rumo ask-to-track true` or `rumo ask-to-track false` (the `ask_to_track` key in the
+config). Run the same command whenever the user says to start or stop being asked.
 
 ## Groups
 

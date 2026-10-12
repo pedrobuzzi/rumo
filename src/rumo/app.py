@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 import re
 import shlex
@@ -665,25 +664,14 @@ class RumoApp(App):
         self.build_timeline()
         self.show_detail()
 
-    # The view survives restarts, in a file of its own: config.toml only ever changes when the
-    # user edits a group.
-    def state_path(self) -> Path:
-        return self.config_path.parent / "state.json"
-
+    # The view survives restarts, in state.json: config.toml only ever changes when the user
+    # edits a group.
     def load_state(self) -> None:
-        try:
-            data = json.loads(self.state_path().read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            return
-        if isinstance(data, dict) and data.get("view") in VIEWS:
-            self.view = data["view"]
+        if (view := config.load_state(self.config_path).get("view")) in VIEWS:
+            self.view = view
 
     def save_state(self) -> None:
-        state = {"view": self.view}
-        try:
-            self.state_path().write_text(json.dumps(state) + "\n", encoding="utf-8")
-        except OSError:
-            pass  # remembering is a convenience; never fail an action over it
+        config.update_state(self.config_path, view=self.view)
 
     def action_toggle_step(self) -> None:
         item = self.current_item()

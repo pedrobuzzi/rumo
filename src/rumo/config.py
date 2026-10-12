@@ -3,6 +3,7 @@
     folder = "~/rumo"
     language = "pt-BR"            # language of the content the agent writes
     tags = ["bug", "feature"]     # fixed list the agent picks from
+    ask_to_track = true           # in agent sessions without an item, offer to track them (unset: ask once)
 
     [groups.auth]
     name = "Migração auth"        # content: any language
@@ -57,6 +58,7 @@ class Config:
     language: str = "en"
     tags: list[str] = field(default_factory=lambda: list(DEFAULT_TAGS))
     groups: dict[str, Group] = field(default_factory=dict)
+    ask_to_track: bool | None = None  # None: the user was never asked
     error: str | None = None
 
 
@@ -90,6 +92,8 @@ def load(path: Path | None = None) -> Config:
         cfg.language = language.strip()
     if isinstance(tags := data.get("tags"), list):
         cfg.tags = [str(t) for t in tags]
+    if isinstance(ask := data.get("ask_to_track"), bool):
+        cfg.ask_to_track = ask
     groups = data.get("groups")
     for key, value in (groups.items() if isinstance(groups, dict) else []):
         if isinstance(value, dict):
@@ -127,6 +131,29 @@ def add_group(path: Path, name: str, color: str) -> str:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(text.rstrip("\n") + "\n" + block if text.strip() else block.lstrip("\n"), encoding="utf-8")
     return key
+
+
+def set_ask_to_track(path: Path, value: bool) -> None:
+    """Write `ask_to_track` as a top-level key: replace it in place, or add it before the first table.
+
+    Without a config file, write only this key: the hook that records the answer may not see the
+    system language, so the defaults are left to the first `rumo` run or to `load`.
+    """
+    new_line = f"ask_to_track = {'true' if value else 'false'}\n"
+    if not path.exists():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(new_line, encoding="utf-8")
+        return
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    if lines and not lines[-1].endswith("\n"):
+        lines[-1] += "\n"
+    first_table = next((i for i, line in enumerate(lines) if _TABLE_RE.match(line)), len(lines))
+    found = next((i for i in range(first_table) if re.match(r"^\s*ask_to_track\s*=", lines[i])), None)
+    if found is not None:
+        lines[found] = new_line
+    else:
+        lines.insert(_content_end(lines, -1, first_table), new_line)
+    path.write_text("".join(lines), encoding="utf-8")
 
 
 class GroupNotEditable(Exception):
@@ -195,6 +222,29 @@ def default_text(folder: Path, language: str) -> str:
         '# name = "Auth migration"\n'
         '# color = "blue"\n'
     )
+
+
+def state_path(config_path: Path) -> Path:
+    """Small state rumo writes for itself (the TUI's view, the hook's counters), apart from the user's config."""
+    return config_path.parent / "state.json"
+
+
+def load_state(config_path: Path) -> dict:
+    try:
+        data = json.loads(state_path(config_path).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def update_state(config_path: Path, **changes: object) -> None:
+    """Merge `changes` into state.json. Never fails: remembering is a convenience."""
+    try:
+        path = state_path(config_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(load_state(config_path) | changes) + "\n", encoding="utf-8")
+    except OSError:
+        pass
 
 
 def toml_str(value: str) -> str:

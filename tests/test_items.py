@@ -272,6 +272,23 @@ class ConfigTest(unittest.TestCase):
         with self.assertRaises(config.GroupNotEditable):
             config.delete_group(self.path, "missing")
 
+    def test_ask_to_track_is_unset_until_answered_then_a_top_level_key(self):
+        self.assertIsNone(config.load(self.path).ask_to_track)
+        # No file yet: only the key, so the language still comes from the system (the hook's
+        # environment may not have it) and the first `rumo` run can still write its defaults.
+        config.set_ask_to_track(self.path, False)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "ask_to_track = false\n")
+        self.assertIs(config.load(self.path).ask_to_track, False)
+
+        self.path.write_text(
+            "folder = \"~/rumo\"\n\n# groups\n[groups.auth]\nname = \"Auth\"\ncolor = \"blue\"\n", encoding="utf-8")
+        config.set_ask_to_track(self.path, True)
+        config.set_ask_to_track(self.path, False)
+        self.assertEqual(self.path.read_text(encoding="utf-8"), (
+            "folder = \"~/rumo\"\nask_to_track = false\n\n# groups\n[groups.auth]\nname = \"Auth\"\ncolor = \"blue\"\n"))
+        cfg = config.load(self.path)
+        self.assertEqual((cfg.ask_to_track, cfg.groups["auth"].name), (False, "Auth"))
+
     def test_language_from_env(self):
         self.assertEqual(config.language_from_env({"LANG": "pt_BR.UTF-8"}), "pt-BR")
         self.assertEqual(config.language_from_env({"LC_ALL": "de_DE.UTF-8", "LANG": "en_US"}), "de-DE")

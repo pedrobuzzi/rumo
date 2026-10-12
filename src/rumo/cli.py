@@ -1,7 +1,7 @@
 """The `rumo` command: opens the Timeline.
 
 Other subcommands exist for the agent and the hook, and are kept out of
-the help on purpose: `hook`, `index`, `path`, `group-add`, `--version`.
+the help on purpose: `hook`, `index`, `path`, `group-add`, `ask-to-track`, `--version`.
 """
 
 from __future__ import annotations
@@ -37,6 +37,8 @@ def main(argv: list[str] | None = None) -> None:
         _index()
     elif command == "group-add":
         _group_add(args[1:])
+    elif command == "ask-to-track":
+        _ask_to_track(args[1:])
     elif command in ("-V", "--version"):
         from importlib.metadata import version
 
@@ -71,6 +73,18 @@ def _group_add(rest: list[str]) -> None:
         print(f'usage: rumo group-add "<name>" <{"|".join(config.PALETTE)}>', file=sys.stderr)
         raise SystemExit(2)
     print(config.add_group(config.load().path, rest[0].strip(), rest[1]))
+
+
+def _ask_to_track(rest: list[str]) -> None:
+    """`rumo ask-to-track true|false`: whether the hook offers rumo in agent sessions without an item."""
+    from rumo import config
+
+    if len(rest) != 1 or rest[0] not in ("true", "false"):
+        print("usage: rumo ask-to-track <true|false>", file=sys.stderr)
+        raise SystemExit(2)
+    path = config.load().path
+    config.set_ask_to_track(path, rest[0] == "true")
+    print(f"ask_to_track = {rest[0]} in {path}")
 
 
 if __name__ == "__main__":
