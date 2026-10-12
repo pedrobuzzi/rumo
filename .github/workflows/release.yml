@@ -105,8 +105,7 @@ jobs:
           done
           echo "::error::rumo-cli $version did not show up on PyPI"
           exit 1
-      - name: Make Homebrew's Python look like a real machine (global packages with a legacy .pth)
-        run: scripts/simulate_messy_homebrew_python.sh
+      # In CI it installs the formula on a Python like a real user's before pushing it.
       - name: Update the formula in pedrobuzzi/homebrew-tap
         env:
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

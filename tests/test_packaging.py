@@ -39,6 +39,18 @@ class PackagingTest(unittest.TestCase):
         ).stdout
         self.assertIn("virtualenv_install_with_resources(system_site_packages: false)", formula)
 
+    def test_release_installs_the_formula_on_a_messy_python_but_generates_resources_on_a_clean_one(self):
+        # `brew update-python-resources` runs pip on Homebrew's Python itself, so the legacy .pth
+        # breaks it too (it is a maintainer tool: users never run it). Dirty that Python after it.
+        script = (ROOT / "scripts" / "update_homebrew_tap.sh").read_text(encoding="utf-8")
+        resources = script.index("brew update-python-resources")
+        messy = script.index("simulate_messy_homebrew_python.sh")
+        install = script.index("brew install --build-from-source")
+        self.assertLess(resources, messy)
+        self.assertLess(messy, install)
+        workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+        self.assertNotIn("simulate_messy_homebrew_python.sh", workflow)
+
     def test_bump_script_updates_both_versions(self):
         script = (ROOT / "scripts" / "bump_version.py").read_text(encoding="utf-8")
         self.assertTrue(re.search(r"pyproject\.toml", script) and re.search(r"plugin\.json", script))
