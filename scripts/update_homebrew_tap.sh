@@ -20,6 +20,10 @@ TAP_DIR="$(brew --repository)/Library/Taps/pedrobuzzi/homebrew-tap"
 
 export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1 HOMEBREW_NO_ENV_HINTS=1
 
+if [ "$DRY_RUN" != "--dry-run" ]; then
+  : "${HOMEBREW_TAP_TOKEN:?HOMEBREW_TAP_TOKEN is required to push}"
+fi
+
 created_tap=""
 if [ ! -d "$TAP_DIR" ]; then
   # A plain clone works even while the tap repository is still empty (brew tap does not).
@@ -27,10 +31,12 @@ if [ ! -d "$TAP_DIR" ]; then
   created_tap=1
 fi
 cleanup() {
+  local status=$?  # keep the script's exit status; the trap must not turn a failure into success
   if [ "$DRY_RUN" = "--dry-run" ]; then
     brew uninstall --quiet "$TAP_NAME/rumo" >/dev/null 2>&1 || true
     if [ -n "$created_tap" ]; then rm -rf "$TAP_DIR"; fi
   fi
+  exit "$status"
 }
 trap cleanup EXIT
 
@@ -47,7 +53,6 @@ if [ "$DRY_RUN" = "--dry-run" ]; then
   exit 0
 fi
 
-: "${HOMEBREW_TAP_TOKEN:?HOMEBREW_TAP_TOKEN is required to push}"
 cd "$TAP_DIR"
 git add Formula/rumo.rb
 if git diff --cached --quiet; then
