@@ -64,7 +64,9 @@ The `release` workflow then runs the tests, checks that the tag matches both ver
 to PyPI, creates the GitHub Release and updates the Homebrew formula. Last, `install-check` installs
 the new version the way users do (Homebrew from the tap, uv, pipx and the Claude Code plugin from
 the GitHub marketplace) on clean macOS, Linux and Windows machines and runs
-`scripts/smoke_test.sh`. It also runs every Monday, so a change in Homebrew, a dependency or Claude
+`scripts/smoke_test.sh`. Before each Homebrew install, `scripts/simulate_messy_homebrew_python.sh`
+puts a legacy `*-nspkg.pth` in Homebrew's Python, the way packages installed there with pip do on
+real machines (it once broke the formula). It also runs every Monday, so a change in Homebrew, a dependency or Claude
 Code that breaks installing shows up even between releases. Claude Code users get the new
 plugin version from `/plugin marketplace update rumo`.
 

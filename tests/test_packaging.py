@@ -27,6 +27,18 @@ class PackagingTest(unittest.TestCase):
         command = hooks["UserPromptSubmit"][0]["hooks"][0]["command"]
         self.assertIn("rumo hook", command)
 
+    def test_homebrew_formula_ignores_the_users_global_python_packages(self):
+        # A legacy `*-nspkg.pth` in Homebrew Python's global site-packages (left by packages installed
+        # there with pip) breaks pip's isolated builds inside the formula's virtualenv.
+        import subprocess
+        import sys
+
+        formula = subprocess.run(
+            [sys.executable, str(ROOT / "scripts" / "homebrew_formula.py"), "https://example.com/rumo.tar.gz", "0" * 64],
+            capture_output=True, text=True, check=True,
+        ).stdout
+        self.assertIn("virtualenv_install_with_resources(system_site_packages: false)", formula)
+
     def test_bump_script_updates_both_versions(self):
         script = (ROOT / "scripts" / "bump_version.py").read_text(encoding="utf-8")
         self.assertTrue(re.search(r"pyproject\.toml", script) and re.search(r"plugin\.json", script))

@@ -18,7 +18,9 @@ TEMPLATE = '''class Rumo < Formula
   depends_on "python@3.13"
 
   def install
-    virtualenv_install_with_resources
+    # Isolated from Homebrew Python's global site-packages: a legacy `*-nspkg.pth` left there by
+    # packages installed with pip breaks pip's builds of the resources inside this virtualenv.
+    virtualenv_install_with_resources(system_site_packages: false)
   end
 
   test do

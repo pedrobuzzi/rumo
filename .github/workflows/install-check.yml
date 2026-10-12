@@ -28,6 +28,8 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Make Homebrew's Python look like a real machine (global packages with a legacy .pth)
+        run: scripts/simulate_messy_homebrew_python.sh
       - name: brew install pedrobuzzi/tap/rumo
         run: |
           brew update
