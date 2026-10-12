@@ -59,7 +59,12 @@ jobs:
         env:
           VERSION: ${{ inputs.version }}
         run: |
-          uv tool install "rumo-cli${VERSION:+==$VERSION}"
+          # Right after a release, PyPI's index can lag a minute or two behind the upload.
+          for attempt in 1 2 3 4 5 6; do
+            if uv tool install --refresh "rumo-cli${VERSION:+==$VERSION}"; then break; fi
+            if [ "$attempt" = 6 ]; then exit 1; fi
+            echo "waiting for PyPI's index ($attempt/6)"; sleep 30
+          done
           uv tool dir --bin >> "$GITHUB_PATH"
       - name: Smoke test
         env:
@@ -85,7 +90,12 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: |
           command -v pipx >/dev/null || brew install pipx
-          pipx install "rumo-cli${VERSION:+==$VERSION}"
+          # Right after a release, PyPI's index can lag a minute or two behind the upload.
+          for attempt in 1 2 3 4 5 6; do
+            if pipx install --force --pip-args=--no-cache-dir "rumo-cli${VERSION:+==$VERSION}"; then break; fi
+            if [ "$attempt" = 6 ]; then exit 1; fi
+            echo "waiting for PyPI's index ($attempt/6)"; sleep 30
+          done
           pipx environment --value PIPX_BIN_DIR >> "$GITHUB_PATH"
       - name: Smoke test
         env:
