@@ -97,8 +97,10 @@ When you create an item or an idea, the agent checks whether it belongs to an ex
 other ungrouped items look like the same initiative, it suggests a new group (name and color) and
 applies it only if you agree.
 
-While a session is linked, the agent updates the item after every response in which something
-changed. `/clear` starts a new, unlinked session; `claude --resume <id>` picks the old one up again.
+Steps are the heart of an item: while a session is linked, the agent checks off what got done, adds
+what came up and keeps the next action as the first open step, after every response in which work
+happened. Left off is one line and Context at most three. `/clear` starts a new, unlinked session;
+`claude --resume <id>` picks the old one up again.
 
 ## Item format
 

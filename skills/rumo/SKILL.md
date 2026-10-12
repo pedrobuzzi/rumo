@@ -31,6 +31,7 @@ them in the `rumo` Timeline: **Past** (done), **Now** (doing, waiting), **Later*
 
 Write all item content (title, Left off, Context, steps) in the configured **language**. Keep the
 structure (frontmatter keys, section names, statuses, tags, `[agent]`/`[manual]`) in English.
+Follow "Writing an item" below every time you create or change an item.
 
 ## 1. No subcommand: show the menu
 
@@ -57,12 +58,12 @@ conversation so far.
    goal (wording may differ), favoring `idea` and `paused`. If any, show them (title, status,
    slug) and ask: **promote/continue** one of them, or **create a new** item.
    - Promote/continue: do what `link` does, set `status: doing` if it was `idea`/`paused`/`waiting`,
-     and fill Left off, Context and Steps from the conversation.
+     and bring its Steps up to date with the conversation.
 2. Otherwise create `<folder>/YYYY-MM-DD-<slug>.md` (today; slug from the title in kebab-case
    without accents; add `-2`, `-3` if taken) with the format below: `status: doing`, tags chosen
-   from the allowed list (1-3), `group` only if one clearly fits, Left off, Context, Steps (pending
-   work as `- [ ] [agent] ...` or `- [ ] [manual] ...`, work already done here as `- [x]`), and, in
-   full mode, the session line.
+   from the allowed list (1-3), `group` only if one clearly fits, Steps (work already done here as
+   `- [x]`, everything pending as `- [ ]`, the next action first), a one-line Left off, a Context of
+   at most 3 lines, and, in full mode, the session line.
 3. **Suggest a group** (see "Groups" below).
 4. Confirm in one line: path + (full mode) "this session now keeps it updated until /clear, park or
    unlink", or (simple mode) "update it with /rumo or in the rumo Timeline".
@@ -78,7 +79,8 @@ conversation so far.
 1. With an argument, find the item by slug or title. Without one, suggest up to 3 items similar to
    the conversation. If ambiguous, ask.
 2. Append the session line to `## Sessions` (never delete lines). If the status was `paused` or
-   `waiting` and work restarts now, set `doing`. Update Left off, Steps and `updated`.
+   `waiting` and work restarts now, set `doing`. Bring the Steps up to date, then Left off and
+   `updated`.
 
 ### now
 List the `doing` and `waiting` items: title, status, and the first unchecked step of each. Offer to
@@ -89,7 +91,7 @@ Search titles and content: `grep -il "<text>" "<folder>"/*.md`, then read only t
 Answer the question with the items found (status, when done, what was decided).
 
 ### status
-Show the linked item's Left off and unchecked steps.
+Show the linked item's open steps (the first one is the next action) and its Left off.
 
 ### step <text>
 Add `- [ ] [agent] <text>` or `- [ ] [manual] <text>` (manual = the user or someone else does it
@@ -98,8 +100,9 @@ outside the agent: review, deploy, a call). Update `updated`.
 ### park [reason]
 1. Ask, if unclear: `waiting` (blocked on someone or something else) or `paused` (the user chose to
    stop for now).
-2. Rewrite **Left off** so that someone with no context can resume: the exact next action and any
-   blocker. Make sure every pending piece of work is a step.
+2. Make sure the Steps tell someone with no context how to resume: every pending piece of work is
+   a step and the next action is the first open one. Set Left off to one line: the blocker, or why
+   it stops here.
 3. Set the status and `updated`, then append ` | closed` to **this session's** line in Sessions.
 
 ### done
@@ -111,6 +114,24 @@ In simple mode, ask which item to finish (from `now`) since no item is linked.
 
 ### unlink
 Append ` | closed` to this session's line. Nothing else changes.
+
+## Writing an item
+
+Steps are the item. Done steps are the record of what happened; open steps are the plan. Everything
+else stays short.
+
+- **One step, one action, one line.** Start with a verb, keep it under about 70 characters, and
+  include a detail (a commit, an id, a command) only when that step needs it. `[agent]` is work the
+  agent does; `[manual]` is work the user or someone else does (a review, a deploy, a decision).
+- **The first open step is the next action.** Reorder when priorities change.
+- **Keep the Steps current while linked.** After every response in which work happened: check what
+  got done, add a step for whatever came up or was left for later, reword steps that changed, drop
+  steps the user abandoned. The hook repeats the open steps on every prompt so you can check them off.
+- **Left off is one line**: where it stands or what blocks it. Not a copy of the next step.
+- **Context is at most 3 short lines**: what this is and why it matters. No history, no logs, no
+  list of what was done (the checked steps are that), no commands. A link to a longer document is
+  fine.
+- Conversation-only replies need no update. Never add sections.
 
 ## Groups
 
@@ -156,14 +177,15 @@ updated: 2026-10-11 16:30
 ---
 
 ## Left off
-<the next concrete action, 1-2 sentences>
+<one line: where it stands or what blocks it>
 
 ## Context
-<what this is and the reasoning so far, in plain words>
+<at most 3 short lines: what this is and why it matters>
 
 ## Steps
-- [x] [agent] <done step>
-- [ ] [manual] <step the user or someone else does>
+- [x] [agent] <done: one short line, starting with a verb>
+- [ ] [agent] <the next action>
+- [ ] [manual] <what the user or someone else does>
 
 ## Sessions
 - 2026-10-11 10:08 | web-app (main) | <session id> | /absolute/path

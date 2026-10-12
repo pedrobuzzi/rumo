@@ -11,6 +11,13 @@ title: Migração do logout
 status: waiting
 ---
 
+## Steps
+- [x] [agent] Ajustar o handler
+- [ ] [manual] Pedir review da PR
+- [ ] [agent] Teste e2e do logout
+- [ ] [agent] Remover o cookie antigo
+- [ ] [agent] Atualizar a doc
+
 ## Sessions
 - 2026-10-11 10:08 | web-app (main) | open-session | /Users/x/repo/web-app
 - 2026-10-11 12:00 | web-app (main) | parked-session | /Users/x/repo/web-app | closed
@@ -35,6 +42,12 @@ class HookTest(unittest.TestCase):
         self.assertIn("2026-10-11-migração.md (status: waiting)", result.stdout)
         for rule in ("Left off", "Steps", "[manual]", "| closed", "language"):
             self.assertIn(rule, result.stdout)
+
+    def test_shows_the_next_open_steps_so_the_agent_can_keep_them_current(self):
+        result = self.run_hook(json.dumps({"session_id": "open-session"}))
+        self.assertIn("Open steps: [manual] Pedir review da PR; [agent] Teste e2e do logout; "
+                      "[agent] Remover o cookie antigo; (+1 more)", result.stdout)
+        self.assertNotIn("Ajustar o handler", result.stdout)
 
     def test_speaks_utf8_even_on_a_non_utf8_console(self):
         self.env["PYTHONIOENCODING"] = "cp1252"
