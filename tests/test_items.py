@@ -174,6 +174,18 @@ class ItemsTest(unittest.TestCase):
             "2026-10-14-cache-nas-respostas | idea | Cache nas respostas",
         ])
 
+    def test_quoted_values_are_read_without_the_quotes(self):
+        write(self.folder, "a.md", '---\ntitle: "PhraseDay: ASO e conversão"\nstatus: doing\n---\n')
+        write(self.folder, "b.md", "---\ntitle: 'Word Fall: iPhone Duo'\nstatus: \"waiting\"\n---\n")
+        write(self.folder, "c.md", '---\ntitle: "O \\"ok\\" do Pedro \\\\ hoje"\n---\n')
+        write(self.folder, "d.md", '---\ntitle: "meio aberto\n---\n')
+        loaded = {i.slug: i for i in items.list_items(self.folder)}
+        self.assertEqual(loaded["a"].title, "PhraseDay: ASO e conversão")
+        self.assertEqual((loaded["b"].title, loaded["b"].status), ("Word Fall: iPhone Duo", "waiting"))
+        self.assertEqual(loaded["c"].title, 'O "ok" do Pedro \\ hoje')
+        self.assertEqual(loaded["d"].title, '"meio aberto')
+        self.assertIn("| doing | PhraseDay: ASO e conversão", items.index([loaded["a"]]))
+
     def test_edits_a_file_whose_frontmatter_was_left_unclosed(self):
         path = write(self.folder, "2026-10-11-broken.md", "---\ntitle: Quebrado\n\n## Left off\nAlgo\n")
         items.set_status(items.load(path), "paused")
@@ -223,6 +235,42 @@ class ConfigTest(unittest.TestCase):
             ("migracao-auth", "Migração auth", "blue"),
             ("migracao-auth-2", "Migração auth", "green"),
         ])
+
+    def test_updates_a_group_and_keeps_the_rest_of_the_file(self):
+        original = (
+            "# my notes\nfolder = \"~/rumo\"\n\n"
+            "[groups.auth]\nname = \"Auth\"  # login work\ncolor = \"blue\"\n\n"
+            "# payments below\n[ groups . \"pay\" ]\nname = \"Pagamentos\"\n\n"
+            "[groups.ops]\nname = \"Ops\"\ncolor = \"red\"\n"
+        )
+        self.path.write_text(original, encoding="utf-8")
+        config.update_group(self.path, "auth", name="Migração auth")
+        config.update_group(self.path, "pay", color="green")
+        config.update_group(self.path, "ops", name="Infra", color="cyan")
+        self.assertEqual(self.path.read_text(encoding="utf-8"), (
+            "# my notes\nfolder = \"~/rumo\"\n\n"
+            "[groups.auth]\nname = \"Migração auth\"\ncolor = \"blue\"\n\n"
+            "# payments below\n[ groups . \"pay\" ]\nname = \"Pagamentos\"\ncolor = \"green\"\n\n"
+            "[groups.ops]\nname = \"Infra\"\ncolor = \"cyan\"\n"
+        ))
+
+    def test_deletes_a_group_and_keeps_the_rest_of_the_file(self):
+        self.path.write_text(
+            "folder = \"~/rumo\"\n\n[groups.auth]\nname = \"Auth\"\ncolor = \"blue\"\n\n"
+            "[groups.pay]\nname = \"Pay\"\ncolor = \"green\"\n\n[other]\nx = 1\n",
+            encoding="utf-8",
+        )
+        config.delete_group(self.path, "auth")
+        config.delete_group(self.path, "pay")
+        self.assertEqual(self.path.read_text(encoding="utf-8"), "folder = \"~/rumo\"\n\n[other]\nx = 1\n")
+
+    def test_group_that_cannot_be_edited_as_text_raises(self):
+        self.path.write_text("[groups]\nauth = { name = \"Auth\", color = \"blue\" }\n", encoding="utf-8")
+        self.assertEqual(config.load(self.path).groups["auth"].name, "Auth")
+        with self.assertRaises(config.GroupNotEditable):
+            config.update_group(self.path, "auth", name="X")
+        with self.assertRaises(config.GroupNotEditable):
+            config.delete_group(self.path, "missing")
 
     def test_language_from_env(self):
         self.assertEqual(config.language_from_env({"LANG": "pt_BR.UTF-8"}), "pt-BR")

@@ -1,6 +1,6 @@
 # rumo views and groups — spec
 
-Status: draft, waiting for the user's review (local file; this project has no issue tracker yet)
+Status: implemented, not released yet (local file; this project has no issue tracker yet)
 Date: 2026-10-12
 Builds on [rumo-v1.md](rumo-v1.md). Replaces its stories 14, 15, 18 and 19 and the TUI color rules.
 

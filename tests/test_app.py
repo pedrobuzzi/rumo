@@ -1,13 +1,14 @@
 import os
+import re
 import tempfile
 import unittest
 from datetime import date
 from pathlib import Path
 
-from textual.widgets import OptionList, Static
+from textual.widgets import Input, OptionList, Static
 
 from rumo import config, items
-from rumo.app import RumoApp
+from rumo.app import GroupScreen, RumoApp
 
 TODAY = date(2026, 10, 11)
 
@@ -65,6 +66,132 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("Migração auth", legend)
             self.assertIn("Pagamentos", legend)
 
+    @staticmethod
+    def current_view(app: RumoApp) -> str:
+        """The view name highlighted in the list's title."""
+        m = re.search(r"\[bold\]\s*\d (\w+)", str(app.query_one("#timeline", OptionList).border_title))
+        return m.group(1) if m else ""
+
+    @staticmethod
+    def row_text(app: RumoApp, option_id: str) -> str:
+        return str(app.query_one("#timeline", OptionList).get_option(option_id).prompt)
+
+    async def test_status_is_a_shape_and_a_word(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertIn("● doing", self.row_text(app, "item:logout"))
+            self.assertIn("◐ waiting", self.row_text(app, "item:waiting-infra"))
+            self.assertIn("○ idea", self.row_text(app, "item:cache-idea"))
+            self.assertIn("✓ Oct 09", self.row_text(app, "item:shipped"))
+
+    async def test_v_cycles_the_three_views_and_digits_jump_to_one(self):
+        item(self.folder, "pix", "doing", "2026-10-11 11:00", extra="group: pagamentos\n")
+        timeline_rows = [
+            "header:past", "item:shipped",
+            "header:now", "item:pix", "item:logout", "item:waiting-infra",
+            "header:later", "item:cache-idea",
+        ]
+        grouped_rows = [
+            "header:past", "item:shipped",
+            "header:now", "group:now:migracao-auth", "item:logout", "group:now:pagamentos", "item:pix",
+            "group:now:-", "item:waiting-infra",
+            "header:later", "group:later:-", "item:cache-idea",
+        ]
+        project_rows = [
+            "group:migracao-auth", "item:logout",
+            "group:pagamentos", "item:pix",
+            "group:-", "item:shipped", "item:waiting-infra", "item:cache-idea",
+        ]
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(self.rows(app), timeline_rows)
+            self.assertEqual(self.current_view(app), "Timeline")
+            for key, expected, name in [("v", grouped_rows, "Grouped"), ("v", project_rows, "Projects"),
+                                        ("v", timeline_rows, "Timeline"), ("3", project_rows, "Projects"),
+                                        ("2", grouped_rows, "Grouped"), ("1", timeline_rows, "Timeline")]:
+                await pilot.press(key)
+                await pilot.pause()
+                self.assertEqual(self.rows(app), expected, key)
+                self.assertEqual(self.current_view(app), name)
+
+    async def test_the_selected_item_stays_selected_across_views(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            app.query_one("#timeline", OptionList).highlighted = self.rows(app).index("item:cache-idea")
+            await pilot.press("v")
+            await pilot.pause()
+            self.assertEqual(self.highlighted(app), "item:cache-idea")
+            await pilot.press("v")
+            await pilot.pause()
+            self.assertEqual(self.highlighted(app), "item:cache-idea")
+
+    async def test_p_and_l_collapse_past_and_later_in_every_view(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("p", "l")
+            await pilot.pause()
+            self.assertEqual(self.rows(app), ["header:past", "header:now", "item:logout", "item:waiting-infra", "header:later"])
+            self.assertIn("1 hidden · p opens", self.row_text(app, "header:past"))
+            self.assertIn("1 hidden · l opens", self.row_text(app, "header:later"))
+            await pilot.press("v")
+            await pilot.pause()
+            self.assertEqual(self.rows(app), [
+                "header:past", "header:now", "group:now:migracao-auth", "item:logout",
+                "group:now:-", "item:waiting-infra", "header:later",
+            ])
+            await pilot.press("v")
+            await pilot.pause()
+            self.assertEqual(self.rows(app), ["group:migracao-auth", "item:logout", "group:-", "item:waiting-infra"])
+            self.assertIn("1 past ▸ · 1 now · 1 later ▸", self.row_text(app, "group:-"))
+            await pilot.press("p", "l")
+            await pilot.pause()
+            self.assertEqual(self.rows(app), [
+                "group:migracao-auth", "item:logout", "group:-", "item:shipped", "item:waiting-infra", "item:cache-idea",
+            ])
+
+    async def test_a_filter_shows_matches_in_collapsed_sections(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("p", "l", "slash", *"cache")
+            await pilot.pause()
+            self.assertEqual(self.rows(app), ["header:later", "item:cache-idea"])
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertNotIn("item:cache-idea", self.rows(app))
+
+    async def test_collapsing_the_selected_item_moves_the_selection_to_now(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            app.query_one("#timeline", OptionList).highlighted = self.rows(app).index("item:cache-idea")
+            await pilot.press("l")
+            await pilot.pause()
+            self.assertEqual(self.highlighted(app), "item:logout")
+
+    async def test_remembers_the_view_and_collapsed_sections_between_runs(self):
+        async with self.app().run_test() as pilot:
+            await pilot.press("2", "p")
+            await pilot.pause()
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(self.current_view(app), "Grouped")
+            self.assertEqual(self.rows(app)[:3], ["header:past", "header:now", "group:now:migracao-auth"])
+            self.assertIn("item:cache-idea", self.rows(app))
+
+    async def test_a_broken_remembered_state_falls_back_to_the_timeline(self):
+        for text in ("{broken", '{"view": "nope", "past_open": "yes"}', "[]"):
+            (self.root / "state.json").write_text(text, encoding="utf-8")
+            app = self.app()
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                self.assertEqual(self.rows(app), [
+                    "header:past", "item:shipped",
+                    "header:now", "item:logout", "item:waiting-infra",
+                    "header:later", "item:cache-idea",
+                ], text)
+
     async def test_s_marks_done_and_the_item_moves_to_past(self):
         app = self.app()
         async with app.run_test() as pilot:
@@ -103,6 +230,96 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("g", "4")  # no group (now after three groups)
             await pilot.pause()
             self.assertEqual(items.load(self.logout).group, "")
+
+    @staticmethod
+    def dialog_options(app: RumoApp) -> OptionList:
+        return app.screen.query_one(OptionList)
+
+    async def test_g_renames_recolors_and_deletes_groups_and_stays_open(self):
+        pix = item(self.folder, "pix", "doing", "2026-10-11 09:00", extra="group: pagamentos\n")
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("g")
+            await pilot.pause()
+            picker = app.screen
+            self.assertIsInstance(picker, GroupScreen)
+            self.assertIn("1 item", str(self.dialog_options(app).get_option("migracao-auth").prompt))
+
+            await pilot.press("r")  # the item's own group is highlighted
+            await pilot.pause()
+            field = app.screen.query_one(Input)
+            self.assertEqual(field.value, "Migração auth")
+            field.value = "Auth nova"
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertIs(app.screen, picker)
+            self.assertEqual(config.load(self.config).groups["migracao-auth"].name, "Auth nova")
+            self.assertEqual(items.load(self.logout).group, "migracao-auth")
+            self.assertIn("Auth nova", str(self.dialog_options(app).get_option("migracao-auth").prompt))
+
+            await pilot.press("c")
+            await pilot.pause()
+            self.assertIn("Pagamentos", str(self.dialog_options(app).get_option("green").prompt))
+            await pilot.press("8")  # cyan
+            await pilot.pause()
+            self.assertIs(app.screen, picker)
+            self.assertEqual(config.load(self.config).groups["migracao-auth"].color, "cyan")
+
+            await pilot.press("down", "d")
+            await pilot.pause()
+            self.assertIn("1 item", str(app.screen.query_one(".dialog-title", Static).render()))
+            await pilot.press("2")  # cancel
+            await pilot.pause()
+            self.assertIn("pagamentos", config.load(self.config).groups)
+            await pilot.press("d", "1")  # delete group
+            await pilot.pause()
+            self.assertIs(app.screen, picker)
+            self.assertNotIn("pagamentos", config.load(self.config).groups)
+            self.assertTrue(pix.exists())
+            self.assertEqual(items.load(pix).group, "")
+
+            await pilot.press("escape")
+            await pilot.pause()
+            legend = str(app.query_one("#legend", Static).render())
+            self.assertIn("Auth nova", legend)
+            self.assertNotIn("Pagamentos", legend)
+            self.assertEqual(items.load(self.logout).group, "migracao-auth")
+
+    async def test_g_with_nothing_selected_manages_and_creates_groups(self):
+        for path in self.folder.glob("*.md"):
+            path.unlink()
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("g")
+            await pilot.pause()
+            picker = app.screen
+            options = self.dialog_options(app)
+            self.assertEqual([options.get_option_at_index(i).id for i in range(options.option_count)],
+                             ["migracao-auth", "pagamentos", "+new"])
+            await pilot.press("1")  # nothing to assign to
+            await pilot.pause()
+            self.assertIs(app.screen, picker)
+
+            await pilot.press("3", *"Plataforma", "enter")
+            await pilot.pause()
+            colors = self.dialog_options(app)
+            assert colors.highlighted is not None
+            self.assertEqual(colors.get_option_at_index(colors.highlighted).id, "yellow")  # first free color
+            await pilot.press("enter")
+            await pilot.pause()
+            self.assertEqual(config.load(self.config).groups["plataforma"].color, "yellow")
+
+    async def test_deleting_a_group_stops_when_one_of_its_items_changed_on_disk(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("g")
+            await pilot.pause()
+            stat = self.logout.stat()
+            os.utime(self.logout, (stat.st_atime, stat.st_mtime + 10))
+            await pilot.press("d", "1")
+            await pilot.pause()
+            self.assertIn("migracao-auth", config.load(self.config).groups)
+            self.assertEqual(items.load(self.logout).group, "migracao-auth")
 
     async def test_t_toggles_tags(self):
         app = self.app()

@@ -24,16 +24,17 @@ from pathlib import Path
 
 from rumo.items import slugify
 
-# Named colors that read well on dark and light terminals.
+# Named colors that read well on dark and light terminals, spread so that no two look alike
+# (yellow leans lime and red leans pink, away from orange; purple leans blue, away from magenta).
 PALETTE = {
     "blue": "#5b8cff",
-    "green": "#3fbf7f",
-    "yellow": "#d9a520",
-    "orange": "#ec8a3c",
-    "red": "#e05d5d",
-    "magenta": "#d561b5",
-    "purple": "#a77ee8",
-    "cyan": "#2fb8c8",
+    "green": "#4fc26b",
+    "yellow": "#d2c43c",
+    "orange": "#f08a3b",
+    "red": "#ee5f74",
+    "magenta": "#e070c8",
+    "purple": "#9d7cf2",
+    "cyan": "#2ab7c9",
 }
 
 DEFAULT_TAGS = [
@@ -128,6 +129,59 @@ def add_group(path: Path, name: str, color: str) -> str:
     return key
 
 
+class GroupNotEditable(Exception):
+    """The group has no `[groups.<key>]` table in the plain form these text edits understand."""
+
+
+_GROUP_TABLE_RE = re.compile(r"""^\s*\[\s*groups\s*\.\s*(?:"([^"]*)"|'([^']*)'|([A-Za-z0-9_-]+))\s*\]\s*(?:#.*)?$""")
+_TABLE_RE = re.compile(r"^\s*\[")
+
+
+def update_group(path: Path, key: str, name: str | None = None, color: str | None = None) -> None:
+    """Rewrite the `name` and/or `color` line of one group, keeping every other line as it is."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    for field_name, value in (("name", name), ("color", color)):
+        if value is None:
+            continue
+        start, end = _group_table(lines, key)
+        new_line = f"{field_name} = {toml_str(value)}\n"
+        found = next((i for i in range(start + 1, end) if re.match(rf"^\s*{field_name}\s*=", lines[i])), None)
+        if found is not None:
+            lines[found] = new_line
+        else:
+            lines.insert(_content_end(lines, start, end), new_line)
+    path.write_text("".join(lines), encoding="utf-8")
+
+
+def delete_group(path: Path, key: str) -> None:
+    """Remove one group's table; comments after it belong to whatever follows, so they stay."""
+    lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+    start, end = _group_table(lines, key)
+    del lines[start:_content_end(lines, start, end)]
+    if start > 0 and not lines[start - 1].strip() and (start == len(lines) or not lines[start].strip()):
+        del lines[start - 1]
+    path.write_text("".join(lines), encoding="utf-8")
+
+
+def _group_table(lines: list[str], key: str) -> tuple[int, int]:
+    """Index of the group's table header and of the line where the next table starts."""
+    for i, line in enumerate(lines):
+        m = _GROUP_TABLE_RE.match(line)
+        if m and next(g for g in m.groups() if g is not None) == key:
+            end = next((j for j in range(i + 1, len(lines)) if _TABLE_RE.match(lines[j])), len(lines))
+            return i, end
+    raise GroupNotEditable(key)
+
+
+def _content_end(lines: list[str], start: int, end: int) -> int:
+    """One past the table's last key line, leaving out the blank and comment lines before the next table."""
+    last = start
+    for i in range(start + 1, end):
+        if lines[i].strip() and not lines[i].lstrip().startswith("#"):
+            last = i
+    return last + 1
+
+
 def default_text(folder: Path, language: str) -> str:
     tags = ", ".join(toml_str(t) for t in DEFAULT_TAGS)
     return (
@@ -136,7 +190,7 @@ def default_text(folder: Path, language: str) -> str:
         f"language = {toml_str(language)}\n"
         f"tags = [{tags}]\n"
         "\n"
-        "# Groups connect related items; the title takes the group color.\n"
+        "# Groups connect related items; each group shows in its own color.\n"
         "# [groups.auth]\n"
         '# name = "Auth migration"\n'
         '# color = "blue"\n'

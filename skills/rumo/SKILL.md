@@ -114,22 +114,25 @@ Append ` | closed` to this session's line. Nothing else changes.
 
 ## Groups
 
-A group is an initiative (a project, epic or theme). The Timeline colors the titles of its items
-with the group color and lists every group in its footer legend. Groups are user content: name them
-in the configured language.
+A group is an initiative (a project, epic or theme). The TUI shows every group in its own color
+(the only thing color means there) and lists the groups in its footer legend. Groups are user
+content: name them in the configured language.
 
 After creating or promoting an item:
 
 1. If an existing group (from the index) clearly fits, set `group: <key>` on the item.
 2. Otherwise, if one or more items **without a group** are clearly part of the same initiative as
    this one, suggest a new group: a short name, a color not used by the existing groups (the index
-   lists groups with their colors, and the available colors), and the items it would apply to:
+   lists groups with their colors, and the available colors; only when all are in use, take the
+   least used one), and the items it would apply to:
    "These 3 items look like one initiative: A, B, C. Create the group "Auth migration" (blue) and
    apply it to all?"
 3. Only if the user says yes: run `rumo group-add "<name>" <color>` (it prints the new key), then add
    `group: <key>` to the frontmatter of each item (with Edit) and update their `updated`.
 4. If nothing fits, or the user says no, leave the item without a group. Never create a group, or
    move an item from one group to another, without the user's confirmation.
+5. Renaming, recoloring and deleting groups is done by the user in the TUI (`g`, then `r`, `c` or
+   `d`). If the user asks you to do it instead, edit that group's table in the config file.
 
 ## Session line
 

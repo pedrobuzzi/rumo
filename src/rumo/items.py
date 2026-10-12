@@ -301,5 +301,13 @@ def _read_frontmatter(lines: list[str]) -> tuple[dict[str, str], int]:
     for line in lines[1:end]:
         key, sep, value = line.partition(":")
         if sep:
-            meta[key.strip()] = value.strip()
+            meta[key.strip()] = _unquote(value.strip())
     return meta, end + 1 if closed else end
+
+
+def _unquote(value: str) -> str:
+    """`"PhraseDay: ASO"` -> `PhraseDay: ASO`: agents quote values that contain a colon, YAML style."""
+    if len(value) < 2 or value[0] != value[-1] or value[0] not in "\"'":
+        return value
+    inner = value[1:-1]
+    return re.sub(r'\\(["\\])', r"\1", inner) if value[0] == '"' else inner
