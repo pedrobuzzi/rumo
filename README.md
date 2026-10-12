@@ -87,12 +87,12 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | `/rumo now` | List what is in progress, with the next step of each. |
 | `/rumo find <text>` | Search past, current and future items. |
 | `/rumo status` | Show where you left off on the linked item. |
-| `/rumo step <text>` | Add a step to the linked item. |
+| `/rumo step <text>` | Add a step to the linked item, or to the item it belongs to when none is linked. |
 | `/rumo park [reason]` | Pause the item with an accurate "Left off" and stop updating it here. |
 | `/rumo done` | Finish the item (checks the steps, asks first). |
 | `/rumo unlink` | Stop updating the item from this session. |
 
-`link`, `status`, `step`, `park` and `unlink` need Claude Code with the plugin, because they rely on
+`link`, `status`, `park` and `unlink` need Claude Code with the plugin, because they rely on
 its session id and hook. Other agents get the rest.
 
 When you create an item or an idea, the agent checks whether it belongs to an existing group. If

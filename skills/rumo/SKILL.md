@@ -25,7 +25,7 @@ them in the `rumo` Timeline: **Past** (done), **Now** (doing, waiting), **Later*
      an item whose `## Sessions` has a line with that id that does **not** end in `| closed`:
      `grep -l "$CLAUDE_CODE_SESSION_ID" "<folder>"/*.md` and check that line.
    - **Simple mode** (empty, another agent or an old Claude Code): sessions can't be linked or resumed.
-     `new`, `idea`, `now`, `find` and `done` work without a Sessions section; `link`, `status`, `step`,
+     `new`, `idea`, `now`, `find`, `step` and `done` work without a Sessions section; `link`, `status`,
      `park` and `unlink` are not available, so say they need Claude Code with the rumo plugin.
      The menu shows only `new`, `idea`, `now`, `find`.
 
@@ -95,8 +95,16 @@ Answer the question with the items found (status, when done, what was decided).
 Show the linked item's open steps (the first one is the next action) and its Left off.
 
 ### step <text>
-Add `- [ ] [agent] <text>` or `- [ ] [manual] <text>` (manual = the user or someone else does it
-outside the agent: review, deploy, a call). Update `updated`.
+Works in any session, linked or not.
+1. **Pick the item.** The linked one; with several linked, the one the step belongs to. With none
+   linked (or in simple mode), pick from the index the item it most likely belongs to (the
+   conversation so far, this repository, the group, the words of the step) and add it there, saying
+   which in the confirmation. Ask only when two or more items fit equally: list up to 3 (title, slug).
+2. Add `- [ ] [agent] <text>` or `- [ ] [manual] <text>` (manual = the user or someone else does it
+   outside the agent: review, deploy, a call), as one short line starting with a verb, in the
+   configured language. Put it after the open steps, or first if it is the next action. Update
+   `updated`.
+3. Confirm in one line: the step and the item's title. Adding a step never links the session.
 
 ### park [reason]
 1. Ask, if unclear: `waiting` (blocked on someone or something else) or `paused` (the user chose to
