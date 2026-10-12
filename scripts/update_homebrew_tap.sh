@@ -36,7 +36,8 @@ trap cleanup EXIT
 
 mkdir -p "$TAP_DIR/Formula"
 python3 "$ROOT/scripts/homebrew_formula.py" "$URL" "$SHA256" > "$TAP_DIR/Formula/rumo.rb"
-brew update-python-resources "$TAP_NAME/rumo"
+# The package was just uploaded; skip Homebrew's one-day PyPI cooldown for it (its dependencies keep it).
+brew update-python-resources --ignore-main-package-cooldown "$TAP_NAME/rumo"
 brew install --build-from-source "$TAP_NAME/rumo"
 brew test "$TAP_NAME/rumo"
 "$(brew --prefix)/bin/rumo" --version | grep -q "rumo $VERSION"
