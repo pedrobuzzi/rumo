@@ -29,6 +29,12 @@ from rumo.items import Item, WriteConflict
 SHAPES = {"doing": "●", "waiting": "◐", "idea": "○", "paused": "◌", "done": "✓"}
 VIEWS = {"timeline": "Timeline", "projects": "Projects", "repos": "Repos"}
 HORIZONS: tuple[str, ...] = ("past", "now", "later")
+CYCLE = ("now", "later", "past")  # what `h` steps through, starting where rumo opens
+HORIZON_SAYS = {
+    "now": "doing and waiting",
+    "later": "ideas and paused work",
+    "past": f"done in the last {items.PAST_WINDOW_DAYS} days",
+}
 UNGROUPED = "-"  # the "No group" or "No repo" block, which always comes last
 MAX_LABEL = 16  # the project label fits the longest group name up to this many characters
 NEW_GROUP = "+new"
@@ -38,7 +44,7 @@ KEYS = Text.assemble(
     *(
         part
         for key, label in [
-            ("v", "view"), ("p", "past"), ("l", "later"), ("s", "status"), ("g", "group"), ("t", "tags"),
+            ("v", "view"), ("h", "now/later/past"), ("s", "status"), ("g", "group"), ("t", "tags"),
             ("n", "new idea"), ("e", "edit"), ("space", "step"), ("c", "copy resume"), ("/", "filter"), ("q", "quit"),
         ]
         for part in ((key, "bold"), (f" {label}  ", "dim"))
@@ -64,7 +70,7 @@ def short_date(stamp: str) -> str:
 
 EMPTY = {
     "past": f"Nothing finished in the last {items.PAST_WINDOW_DAYS} days.",
-    "now": "Nothing in progress. Press l to see what is next.",
+    "now": "Nothing in progress. Press h to see what is next.",
     "later": "Nothing for later. Press n to capture an idea.",
 }
 
@@ -317,8 +323,7 @@ class RumoApp(App):
         Binding("1", "view('timeline')", show=False),
         Binding("2", "view('projects')", show=False),
         Binding("3", "view('repos')", show=False),
-        Binding("p", "horizon('past')", "past"),
-        Binding("l", "horizon('later')", "later"),
+        Binding("h", "next_horizon", "horizon"),
         Binding("s", "status", "status"),
         Binding("g", "group", "group"),
         Binding("t", "tags", "tags"),
@@ -424,8 +429,10 @@ class RumoApp(App):
         build = {"timeline": self.timeline_rows, "projects": self.project_rows, "repos": self.repo_rows}[self.view]
         if not self.items:
             options = [self.message("No items yet. Press n to capture an idea, or run /rumo new in an agent session.")]
+        elif filtering:
+            options = build(tl, shown) or [self.message("No matches.")]
         else:
-            options = build(tl, shown) or [self.message("No matches." if filtering else EMPTY[self.horizon])]
+            options = [self.banner(tl), *(build(tl, shown) or [self.message(EMPTY[self.horizon])])]
 
         timeline.clear_options()
         timeline.add_options(options)
@@ -454,7 +461,7 @@ class RumoApp(App):
             if len(shown) > 1:
                 if not its and not older:
                     continue
-                rows.append(Option(Text(horizon.capitalize(), "bold"), id=f"header:{horizon}", disabled=True))
+                rows.append(Option(Text(f" {horizon.upper()} ", "bold reverse"), id=f"header:{horizon}", disabled=True))
             if older:
                 rows.append(self.older_option(older))
             rows += [self.item_option(i) for i in its]
@@ -568,10 +575,27 @@ class RumoApp(App):
     def horizon_tabs(self, tl: items.Timeline) -> Text:
         counts = {horizon: len(its) for horizon, its in self.horizons(tl).items()}
         text = Text(" ")
-        for horizon, key in (("past", "p "), ("now", ""), ("later", "l ")):
-            text.append(f"{key}{horizon.capitalize()} {counts[horizon]}", "bold" if horizon == self.horizon else "dim")
-            text.append(" " if horizon == "later" else "  ")
+        for horizon in HORIZONS:
+            name = horizon.upper() if horizon == self.horizon else horizon.capitalize()
+            text.append(f"{name} {counts[horizon]}", "bold" if horizon == self.horizon else "dim")
+            text.append(" " if horizon == HORIZONS[-1] else "  ")
         return text
+
+    def banner(self, tl: items.Timeline) -> Option:
+        """The list's first row: which horizon this is, what it holds, and where `h` goes next."""
+        count = len(self.horizons(tl)[self.horizon])
+        following = CYCLE[(CYCLE.index(self.horizon) + 1) % len(CYCLE)]
+        grid = Table.grid(padding=(0, 1), expand=True)
+        grid.add_column(no_wrap=True)
+        grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        grid.add_column(no_wrap=True, justify="right")
+        grid.add_row(
+            Text(f" {self.horizon.upper()} ", "bold reverse"),
+            Text(f"{plural(count, 'item')} · {HORIZON_SAYS[self.horizon]}", "dim"),
+            Text.assemble(("h", "bold"), (f" ▸ {following.capitalize()}", "dim")),
+        )
+        grid.add_row("", "", "")
+        return Option(grid, id=f"horizon:{self.horizon}", disabled=True)
 
     def legend(self) -> Text:
         text = Text()
@@ -658,9 +682,9 @@ class RumoApp(App):
         self.build_timeline()
         self.show_detail()
 
-    def action_horizon(self, horizon: str) -> None:
-        """`p` shows Past and `p` again goes back to Now; `l` does the same for Later."""
-        self.horizon = "now" if self.horizon == horizon else horizon
+    def action_next_horizon(self) -> None:
+        """`h` steps Now -> Later -> Past -> Now."""
+        self.horizon = CYCLE[(CYCLE.index(self.horizon) + 1) % len(CYCLE)]
         self.build_timeline()
         self.show_detail()
 

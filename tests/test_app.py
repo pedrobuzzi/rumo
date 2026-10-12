@@ -48,8 +48,10 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
 
     @staticmethod
     def rows(app: RumoApp) -> list[str]:
+        """The list below the horizon banner."""
         timeline = app.query_one("#timeline", OptionList)
-        return [str(timeline.get_option_at_index(i).id) for i in range(timeline.option_count)]
+        ids = [str(timeline.get_option_at_index(i).id) for i in range(timeline.option_count)]
+        return [i for i in ids if not i.startswith("horizon:")]
 
     @staticmethod
     def highlighted(app: RumoApp) -> str:
@@ -74,8 +76,12 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
     def current_view(self, app: RumoApp) -> str:
         return self.current(app, app.query_one("#timeline", OptionList).border_title)
 
-    def current_horizon(self, app: RumoApp) -> str:
-        return self.current(app, app.query_one("#timeline", OptionList).border_subtitle)
+    @staticmethod
+    def current_horizon(app: RumoApp) -> str:
+        """The horizon its banner, the list's first row, announces."""
+        timeline = app.query_one("#timeline", OptionList)
+        first = str(timeline.get_option_at_index(0).id) if timeline.option_count else ""
+        return first.removeprefix("horizon:").capitalize() if first.startswith("horizon:") else ""
 
     @staticmethod
     def dialog_options(app: RumoApp) -> OptionList:
@@ -92,7 +98,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.current_view(app), "Timeline")
             self.assertEqual(self.current_horizon(app), "Now")
             subtitle = str(app.query_one("#timeline", OptionList).border_subtitle)
-            for part in ("Past 1", "Now 2", "Later 1"):
+            for part in ("Past 1", "NOW 2", "Later 1"):
                 self.assertIn(part, subtitle)
             legend = str(app.query_one("#legend", Static).render())
             self.assertIn("● doing", legend)
@@ -143,32 +149,48 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
 
     # ---------- horizons ----------
 
-    async def test_p_and_l_show_one_horizon_at_a_time(self):
+    async def test_h_cycles_now_later_past_one_at_a_time(self):
         app = self.app()
         async with app.run_test() as pilot:
-            for key, rows, horizon in [
-                ("p", ["item:shipped"], "Past"),
-                ("p", ["item:logout", "item:waiting-infra"], "Now"),
-                ("l", ["item:cache-idea"], "Later"),
-                ("p", ["item:shipped"], "Past"),
-                ("l", ["item:cache-idea"], "Later"),
-                ("l", ["item:logout", "item:waiting-infra"], "Now"),
+            for rows, horizon in [
+                (["item:cache-idea"], "Later"),
+                (["item:shipped"], "Past"),
+                (["item:logout", "item:waiting-infra"], "Now"),
+                (["item:cache-idea"], "Later"),
             ]:
-                await pilot.press(key)
+                await pilot.press("h")
                 await pilot.pause()
-                self.assertEqual(self.rows(app), rows, key)
+                self.assertEqual(self.rows(app), rows, horizon)
                 self.assertEqual(self.current_horizon(app), horizon)
                 self.assertEqual(self.highlighted(app), rows[0])
+
+    async def test_a_banner_says_which_horizon_is_shown_and_where_h_goes(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            for name, says, then in [
+                ("now", "doing and waiting", "h ▸ Later"),
+                ("later", "ideas and paused work", "h ▸ Past"),
+                ("past", "done in the last 14 days", "h ▸ Now"),
+            ]:
+                await pilot.pause()
+                banner = self.row_text(app, f"horizon:{name}")
+                self.assertIn(name.upper(), banner)
+                self.assertIn(says, banner)
+                self.assertIn(then, banner)
+                await pilot.press("h")
+            await pilot.press("2")
+            await pilot.pause()
+            self.assertEqual(self.current_horizon(app), "Now")  # in every view
 
     async def test_past_shows_the_date_and_hides_older_items_until_asked(self):
         item(self.folder, "ancient", "done", "2026-08-01 10:00", extra="done: 2026-08-01 10:00\n")
         app = self.app()
         async with app.run_test() as pilot:
-            await pilot.press("p")
+            await pilot.press("h", "h")
             await pilot.pause()
             self.assertEqual(self.rows(app), ["older", "item:shipped"])
             self.assertRegex(self.row_text(app, "item:shipped").splitlines()[0], r"^✓ +shipped +Oct 09 *$")
-            app.query_one("#timeline", OptionList).highlighted = 0
+            app.query_one("#timeline", OptionList).highlighted = 1  # below the banner
             await pilot.press("enter")
             await pilot.pause()
             self.assertEqual(self.rows(app), ["item:ancient", "item:shipped"])
@@ -177,7 +199,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
         (self.folder / "cache-idea.md").unlink()
         app = self.app()
         async with app.run_test() as pilot:
-            await pilot.press("l")
+            await pilot.press("h")
             await pilot.pause()
             self.assertEqual(self.rows(app), ["empty"])
             self.assertIn("Nothing for later", self.row_text(app, "empty"))
@@ -220,7 +242,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.rows(app), expected, key)
                 self.assertEqual(self.current_view(app), name)
 
-            await pilot.press("2", "l")
+            await pilot.press("2", "h")
             await pilot.pause()
             self.assertEqual(self.rows(app), ["project:migracao-auth", "item:sso", "project:-", "item:cache-idea"])
             block = self.row_text(app, "project:migracao-auth")
@@ -236,7 +258,8 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
     async def test_the_selected_item_stays_selected_across_views(self):
         app = self.app()
         async with app.run_test() as pilot:
-            app.query_one("#timeline", OptionList).highlighted = self.rows(app).index("item:waiting-infra")
+            timeline = app.query_one("#timeline", OptionList)
+            timeline.highlighted = timeline.get_option_index("item:waiting-infra")
             for key in ("v", "v", "v"):
                 await pilot.press(key)
                 await pilot.pause()
@@ -244,7 +267,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
 
     async def test_remembers_the_view_between_runs(self):
         async with self.app().run_test() as pilot:
-            await pilot.press("2", "p")
+            await pilot.press("2", "h", "h")
             await pilot.pause()
         app = self.app()
         async with app.run_test() as pilot:
@@ -272,7 +295,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(item_.status, "done")
             self.assertIn("done", item_.meta)
             self.assertNotIn("item:logout", self.rows(app))
-            await pilot.press("p")
+            await pilot.press("h", "h")
             await pilot.pause()
             self.assertIn("item:logout", self.rows(app))
 
@@ -428,7 +451,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
         app = self.app()
         async with app.run_test() as pilot:
             timeline = app.query_one("#timeline", OptionList)
-            timeline.highlighted = self.rows(app).index("item:orphan")
+            timeline.highlighted = timeline.get_option_index("item:orphan")
             await pilot.pause()
             self.assertNotIn("group", str(app.query_one("#header", Static).render()))
             self.assertRegex(self.row_text(app, "item:orphan").splitlines()[0], r"^● +orphan *$")

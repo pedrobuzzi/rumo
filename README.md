@@ -12,7 +12,7 @@ Timeline, and let your AI agent sessions keep it up to date while you work.
 
 Items can belong to a **group** (a project or initiative), shown as a label with its name on its
 color; color in rumo only ever means the group. One item is one line, plus its next step. rumo shows
-one horizon at a time (Now, or Past with `p`, or Later with `l`) in three views: the **Timeline**,
+one horizon at a time (`h` steps Now, Later, Past), named in a banner atop the list, in three views: the **Timeline**,
 **Projects** (one block per group) and **Repos** (one block per repository of the item's latest
 agent session). The interface is in English; the content (titles, notes, steps) is in your own
 language.
@@ -66,7 +66,7 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | ↑ ↓ | move through the list |
 | Tab | switch between the list, steps and sessions |
 | `v` | next view: Timeline, Projects, Repos (`1` `2` `3` go straight to one; rumo remembers it) |
-| `p` / `l` | show Past / Later; press again to go back to Now |
+| `h` | next horizon: Now, then Later, then Past, then Now again |
 | `s` | change status (1-5 picks directly) |
 | `g` | set the group or create one; inside, `r` renames, `c` recolors and `d` deletes the highlighted group (its items stay) |
 | `t` | toggle tags |

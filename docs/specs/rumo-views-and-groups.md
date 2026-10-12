@@ -29,7 +29,7 @@ Other gaps:
 - **The project label** is the group name on a background of the group color, always in the same column. Color and name together: two groups with similar colors are still told apart by the name.
 - **Color only means the group.** Status is a gray symbol: `●` doing, `◐` waiting, `○` idea, `◌` paused, `✓` done, explained by a legend in the footer.
 - **Titles stay plain** and, on screen, drop a leading project name that the label already shows ("PhraseDay: ASO e conversão" shows as "ASO e conversão"). The file keeps the full title.
-- **One horizon at a time.** The list shows Now; `p` shows only Past and `p` again goes back to Now; `l` shows only Later and `l` again goes back. rumo always opens on Now. While a filter is active, matches from all three horizons are shown.
+- **One horizon at a time.** The list shows Now; `h` steps to Later, then Past, then back to Now (one key, round 5; it replaced `p` and `l`). A banner atop the list names the horizon (` NOW ` in reverse), what it holds and where `h` goes next; the horizon bar under the list writes the current one in capitals. rumo always opens on Now. While a filter is active, matches from all three horizons are shown, each under the same banner style.
 - **Three views**, switched with `v` (next) or `1` `2` `3`:
   1. **Timeline**: the items of the current horizon. In Now, items of the same project sit together, the most recent first.
   2. **Projects**: one block per group, opened by a line with the project label and the counts of its items in Past, Now and Later. Rows inside drop the label.
@@ -58,9 +58,9 @@ Other gaps:
 ### Horizons
 
 12. As a developer, I want rumo to open on Now, so that what I'm doing comes first.
-13. As a developer, I want `p` to show only Past and `p` again to go back to Now, so that I can look back without the rest in the way.
-14. As a developer, I want `l` to show only Later and `l` again to go back to Now, so that I can pick what to start next.
-15. As a developer, I want `p` from Later to go straight to Past and `l` from Past straight to Later, so that I don't have to pass through Now.
+13. As a developer, I want one key, `h`, to step Now, Later, Past and back to Now, so that I never have to remember which key shows what.
+14. As a developer, I want a banner atop the list naming the horizon, what it holds and where `h` goes next, so that I always know what I am looking at.
+15. As a developer, I want the banner without new colors, so that color keeps meaning only the group.
 16. As a developer, I want the horizons and their item counts shown under the list, with the current one highlighted, so that I know where I am and what is hidden.
 17. As a developer, I want the horizon to apply in every view, so that the keys always mean the same thing.
 18. As a developer, I want a filter to show matches from Past, Now and Later together, under their headers, so that a match is never hidden.
@@ -120,7 +120,7 @@ Other gaps:
 
 ### Horizons
 
-- The TUI keeps the current horizon (`past`, `now`, `later`), starting at `now` and never remembered. `p` sets `past`, or `now` when already in `past`; `l` does the same for `later`.
+- The TUI keeps the current horizon (`past`, `now`, `later`), starting at `now` and never remembered. `h` steps `now` → `later` → `past` → `now`. Outside a filter, the list's first row is a disabled banner (id `horizon:<name>`): the name in capitals on reverse, the item count and what the horizon holds ("doing and waiting", "ideas and paused work", "done in the last 14 days"), and `h ▸ <next>` on the right.
 - The horizons are shown under the list (the list's bottom border title) as `p Past N · Now N · l Later N`, with the current one highlighted. Past counts the items inside the 14-day window.
 - While the filter text is not empty, every view shows the matching items of all three horizons: the Timeline under `Past`, `Now` and `Later` headers, and Projects and Repos with the rows of each block in Past, Now, Later order.
 - Past in any view starts with the "… N older (enter to show)" row when older done items exist.
@@ -133,7 +133,7 @@ Other gaps:
 - **Projects**: per group with items in the current horizon, a disabled block row (label, a rule filling the width, and the counts `N now · N later · N past`, leaving out zeros), then its rows without the label. Groups in config order; "No group" last.
 - **Repos**: the repository of an item is the repository name of its last session line, without the branch. Per repository with items in the current horizon, a disabled block row (name in bold, the rule, the counts), then its rows with the label. Repositories in alphabetical order; "No repo" last.
 - Block and message rows are disabled list options, so the cursor skips them. The selected item stays selected across views and horizons when it is still visible; otherwise the first item row is selected.
-- The footer shows the status legend and the key hints (`v` view, `p` past, `l` later first). The group legend is gone: labels carry the names. The detail pane shows the group as the same label.
+- The footer shows the status legend and the key hints (`v` view and `h` now/later/past first). The group legend is gone: labels carry the names. The detail pane shows the group as the same label.
 - The list takes 55% of the width (it was 45%), so titles are cut less.
 
 ### Remembered state
@@ -171,7 +171,7 @@ Other gaps:
 - Same principle as v1: drive the highest seam with real files in a temp folder and assert on files and on what the user sees; no assertions on private helpers.
 - Rows are checked as plain text rendered at a fixed width (symbol, label, trimmed title, right column, next step, the "…" cut), not as colors.
 - **TUI** (Textual pilot):
-  - The app opens on Now; `p` and `l` switch to Past and Later and back; `p` from Later goes to Past; the horizon line highlights the current one and shows the counts.
+  - The app opens on Now; `h` steps Later, Past and back to Now; the banner names the horizon, what it holds and the next one; the horizon line writes the current one in capitals and shows the counts.
   - Each view lists the expected row ids in the expected order for each horizon (Now clustered by group in the Timeline; blocks in config order or alphabetical order; "No group" and "No repo" last; blocks only with items in the horizon).
   - A filter shows matching items from all horizons.
   - An empty horizon shows its message.
@@ -193,7 +193,7 @@ Other gaps:
 
 ## Further Notes
 
-- Decided by the user in the "Evolução do rumo" artifact, round 4: views Timeline, Projects and Repos (Grouped removed); a project label with a colored background; the next step under every item, cut to one line; status as a symbol with a footer legend; Now grouped by project; the project name hidden from titles on screen; one horizon at a time, with `p` and `l` toggling back to Now, in every view.
+- Decided by the user in the "Evolução do rumo" artifact, round 4: views Timeline, Projects and Repos (Grouped removed); a project label with a colored background; the next step under every item, cut to one line; status as a symbol with a footer legend; Now grouped by project; the project name hidden from titles on screen; one horizon at a time, with `p` and `l` toggling back to Now, in every view. Round 5 (in conversation): a single key, `h`, and a banner that makes the current horizon obvious.
 - Kept from earlier rounds: color only for the group, the palette, no repeated colors, group management inside `g`, remembering the view, quotes removed.
 - Proposed by the assistant and not yet reviewed: the horizon line under the list, the empty-horizon messages, alphabetical repository order, the label width following the longest group name (up to 16), and the Repos block for items without sessions.
 - Repository names come from the session lines, so an item last worked on before a folder was renamed shows the old name until a new session is linked.
