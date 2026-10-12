@@ -1,0 +1,178 @@
+---
+name: rumo
+description: Organize the user's local work items (past, now, later) with rumo. Creates items from the session, notes ideas, links this session to an item, parks or finishes it. Only runs when the user types /rumo. Requires the rumo CLI.
+disable-model-invocation: true
+argument-hint: "[new | idea <text> | link [item] | now | find <text> | status | step <text> | park [reason] | done | unlink]"
+---
+
+# /rumo
+
+Arguments: `$ARGUMENTS`
+
+rumo keeps one Markdown file per piece of work (an **item**) in a local folder. The user sees
+them in the `rumo` Timeline: **Past** (done), **Now** (doing, waiting), **Later** (idea, paused).
+
+## 0. Always start here
+
+1. Run `rumo index`. It prints the items folder, config path, content **language**, allowed **tags**,
+   **groups** (with colors) and the available colors, then one line per item:
+   `slug | status | title | group | tags | left off`.
+   If the command is not found, stop and tell the user to install the CLI first, then run `/rumo` again:
+   - `uv tool install rumo-cli` (macOS, Linux, Windows), or `pipx install rumo-cli`
+   - `brew install pedrobuzzi/tap/rumo` (macOS, Linux)
+2. Check the mode by reading `$CLAUDE_CODE_SESSION_ID` (`echo "$CLAUDE_CODE_SESSION_ID"`):
+   - **Full mode** (it has a value, Claude Code): find out whether this session is already linked, i.e.
+     an item whose `## Sessions` has a line with that id that does **not** end in `| closed`:
+     `grep -l "$CLAUDE_CODE_SESSION_ID" "<folder>"/*.md` and check that line.
+   - **Simple mode** (empty, another agent or an old Claude Code): sessions can't be linked or resumed.
+     `new`, `idea`, `now`, `find` and `done` work without a Sessions section; `link`, `status`, `step`,
+     `park` and `unlink` are not available, so say they need Claude Code with the rumo plugin.
+     The menu shows only `new`, `idea`, `now`, `find`.
+
+Write all item content (title, Left off, Context, steps) in the configured **language**. Keep the
+structure (frontmatter keys, section names, statuses, tags, `[agent]`/`[manual]`) in English.
+
+## 1. No subcommand: show the menu
+
+Show a short numbered menu and wait for the choice. Put first the option that best fits the
+conversation so far.
+
+- Session **not linked**:
+  1. `new`: track what we are doing in this session as an item
+  2. `idea <text>`: note something for later without leaving this topic
+  3. `link [item]`: continue an existing item in this session
+  4. `now`: list what is in progress, with the next step of each
+  5. `find <text>`: search past, current and future items
+- Session **linked** (name the item):
+  1. `status`: show Left off and the next steps
+  2. `step <text>`: add a step
+  3. `park [reason]`: pause it with an accurate Left off and stop updating it here
+  4. `done`: finish it (checks the steps, asks you first)
+  5. `unlink`: stop updating it from this session
+
+## 2. Subcommands
+
+### new
+1. **Look for similar items first.** From the index, pick up to 3 items about the same subject or
+   goal (wording may differ), favoring `idea` and `paused`. If any, show them (title, status,
+   slug) and ask: **promote/continue** one of them, or **create a new** item.
+   - Promote/continue: do what `link` does, set `status: doing` if it was `idea`/`paused`/`waiting`,
+     and fill Left off, Context and Steps from the conversation.
+2. Otherwise create `<folder>/YYYY-MM-DD-<slug>.md` (today; slug from the title in kebab-case
+   without accents; add `-2`, `-3` if taken) with the format below: `status: doing`, tags chosen
+   from the allowed list (1-3), `group` only if one clearly fits, Left off, Context, Steps (pending
+   work as `- [ ] [agent] ...` or `- [ ] [manual] ...`, work already done here as `- [x]`), and, in
+   full mode, the session line.
+3. **Suggest a group** (see "Groups" below).
+4. Confirm in one line: path + (full mode) "this session now keeps it updated until /clear, park or
+   unlink", or (simple mode) "update it with /rumo or in the rumo Timeline".
+
+### idea <text>
+1. Check the index for a similar item. If one exists, show it and ask whether to still create.
+2. Create a small item: frontmatter only (`title`, `status: idea`, `tags`, `created`, `updated`),
+   plus `## Context` only if the user gave detail. Do **not** link this session.
+3. **Suggest a group** (see "Groups" below), in one short question.
+4. Confirm in one line and go back to what we were doing.
+
+### link [item]
+1. With an argument, find the item by slug or title. Without one, suggest up to 3 items similar to
+   the conversation. If ambiguous, ask.
+2. Append the session line to `## Sessions` (never delete lines). If the status was `paused` or
+   `waiting` and work restarts now, set `doing`. Update Left off, Steps and `updated`.
+
+### now
+List the `doing` and `waiting` items: title, status, and the first unchecked step of each. Offer to
+`link` one.
+
+### find <text>
+Search titles and content: `grep -il "<text>" "<folder>"/*.md`, then read only the matches.
+Answer the question with the items found (status, when done, what was decided).
+
+### status
+Show the linked item's Left off and unchecked steps.
+
+### step <text>
+Add `- [ ] [agent] <text>` or `- [ ] [manual] <text>` (manual = the user or someone else does it
+outside the agent: review, deploy, a call). Update `updated`.
+
+### park [reason]
+1. Ask, if unclear: `waiting` (blocked on someone or something else) or `paused` (the user chose to
+   stop for now).
+2. Rewrite **Left off** so that someone with no context can resume: the exact next action and any
+   blocker. Make sure every pending piece of work is a step.
+3. Set the status and `updated`, then append ` | closed` to **this session's** line in Sessions.
+
+### done
+In simple mode, ask which item to finish (from `now`) since no item is linked.
+1. If any step is unchecked, list them and ask whether they are done, dropped (delete the step) or
+   should stay (then do not finish).
+2. Ask for explicit confirmation. Only then set `status: done`, add `done: <now>`, update
+   `updated`, and (full mode) append ` | closed` to this session's line.
+
+### unlink
+Append ` | closed` to this session's line. Nothing else changes.
+
+## Groups
+
+A group is an initiative (a project, epic or theme). The Timeline colors the titles of its items
+with the group color and lists every group in its footer legend. Groups are user content: name them
+in the configured language.
+
+After creating or promoting an item:
+
+1. If an existing group (from the index) clearly fits, set `group: <key>` on the item.
+2. Otherwise, if one or more items **without a group** are clearly part of the same initiative as
+   this one, suggest a new group: a short name, a color not used by the existing groups (the index
+   lists groups with their colors, and the available colors), and the items it would apply to:
+   "These 3 items look like one initiative: A, B, C. Create the group "Auth migration" (blue) and
+   apply it to all?"
+3. Only if the user says yes: run `rumo group-add "<name>" <color>` (it prints the new key), then add
+   `group: <key>` to the frontmatter of each item (with Edit) and update their `updated`.
+4. If nothing fits, or the user says no, leave the item without a group. Never create a group, or
+   move an item from one group to another, without the user's confirmation.
+
+## Session line
+
+Run this, replacing `<DIR>` with the **original working directory of this session** (where `claude`
+was started, not the shell's current folder; `claude --resume` only finds the session from there):
+
+```bash
+D='<DIR>'; echo "- $(date '+%Y-%m-%d %H:%M') | $(basename "$(git -C "$D" rev-parse --show-toplevel 2>/dev/null || echo "$D")") ($(git -C "$D" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '-')) | $CLAUDE_CODE_SESSION_ID | $D"
+```
+
+## Item format
+
+```markdown
+---
+title: <short title, in the configured language>
+status: doing
+group: <group key from the index, optional>
+tags: [bug, frontend]
+created: 2026-10-11 10:08
+updated: 2026-10-11 16:30
+---
+
+## Left off
+<the next concrete action, 1-2 sentences>
+
+## Context
+<what this is and the reasoning so far, in plain words>
+
+## Steps
+- [x] [agent] <done step>
+- [ ] [manual] <step the user or someone else does>
+
+## Sessions
+- 2026-10-11 10:08 | web-app (main) | <session id> | /absolute/path
+```
+
+- Statuses: `idea`, `doing`, `waiting`, `paused`, `done`. `done: <date time>` exists only while done.
+- Timestamps: `date '+%Y-%m-%d %H:%M'`.
+- Sessions: append only. ` | closed` at the end of a line means that session no longer updates the item.
+
+## Always
+
+- Edit item files with the Edit tool (it refuses if the file changed since you read it; then re-read
+  and re-apply). Never rewrite a whole file with Write; creating a new file is fine.
+- Never create, update or close anything in Jira, ClickUp or other tools from an item unless the
+  user explicitly asks in this session.

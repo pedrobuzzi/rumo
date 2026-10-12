@@ -1,0 +1,14 @@
+{
+  "name": "rumo",
+  "owner": { "name": "Pedro Buzzi", "url": "https://github.com/pedrobuzzi" },
+  "description": "rumo: a local, file-based organizer for a developer's past, current and future work.",
+  "plugins": [
+    {
+      "name": "rumo",
+      "source": "./",
+      "description": "The /rumo skill and the hook that keeps linked items up to date.",
+      "category": "productivity",
+      "tags": ["productivity", "tasks", "markdown"]
+    }
+  ]
+}
