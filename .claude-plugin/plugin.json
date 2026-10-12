@@ -1,11 +1,20 @@
 {
   "name": "rumo",
   "displayName": "rumo",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Your dev work, past, now and later: the /rumo skill and a hook that keeps linked items up to date. Needs the rumo CLI (uv tool install rumo-cli).",
-  "author": { "name": "Pedro Buzzi", "url": "https://github.com/pedrobuzzi" },
+  "author": {
+    "name": "Pedro Buzzi",
+    "url": "https://github.com/pedrobuzzi"
+  },
   "homepage": "https://github.com/pedrobuzzi/rumo",
   "repository": "https://github.com/pedrobuzzi/rumo",
   "license": "MIT",
-  "keywords": ["productivity", "tasks", "markdown", "timeline", "worklog"]
+  "keywords": [
+    "productivity",
+    "tasks",
+    "markdown",
+    "timeline",
+    "worklog"
+  ]
 }
