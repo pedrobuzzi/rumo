@@ -1,7 +1,7 @@
 {
   "name": "rumo",
   "displayName": "rumo",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "Your dev work, past, now and later: the /rumo skill and a hook that keeps linked items up to date. Needs the rumo CLI (uv tool install rumo-cli).",
   "author": {
     "name": "Pedro Buzzi",
