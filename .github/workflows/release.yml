@@ -1,5 +1,6 @@
 # Push a tag vX.Y.Z (after scripts/bump_version.py X.Y.Z) to release rumo everywhere:
-# tests -> version check -> build -> PyPI (trusted publishing) -> GitHub Release + Homebrew tap.
+# tests -> version check -> build -> PyPI (trusted publishing) -> GitHub Release + Homebrew tap
+# -> install-check (installs the new version the way users do, on clean machines).
 name: release
 
 on:
@@ -76,6 +77,8 @@ jobs:
     runs-on: macos-latest
     permissions:
       contents: read
+    outputs:
+      version: ${{ steps.sdist.outputs.version }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -109,3 +112,11 @@ jobs:
           URL: ${{ steps.sdist.outputs.url }}
           SHA256: ${{ steps.sdist.outputs.sha256 }}
         run: scripts/update_homebrew_tap.sh "$VERSION" "$URL" "$SHA256"
+
+  install-check:
+    needs: [github-release, homebrew]
+    uses: ./.github/workflows/install-check.yml
+    permissions:
+      contents: read
+    with:
+      version: ${{ needs.homebrew.outputs.version }}

@@ -1,0 +1,111 @@
+# Install rumo the way users do, on clean machines, and smoke-test it:
+# Homebrew (from the tap), uv, pipx and the Claude Code plugin (from the GitHub marketplace).
+# Runs at the end of every release, every Monday (to catch changes in Homebrew, PyPI packages or
+# Claude Code even without a release), when this check itself changes, and on demand.
+name: install-check
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: "Version that must be installed (empty: whatever is latest)"
+        type: string
+        default: ""
+  schedule:
+    - cron: "0 9 * * 1"
+  push:
+    branches: [main]
+    paths: [".github/workflows/install-check.yml", "scripts/smoke_test.sh"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  homebrew:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: brew install pedrobuzzi/tap/rumo
+        run: |
+          brew update
+          brew install pedrobuzzi/tap/rumo
+          brew test pedrobuzzi/tap/rumo
+      - name: Smoke test
+        env:
+          VERSION: ${{ inputs.version }}
+        run: scripts/smoke_test.sh "$VERSION" "$(brew --prefix rumo)/libexec/bin/python"
+
+  uv:
+    name: uv (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@1c37ad07a6a961277cf70c0d37d6f313000f5884 # v10.3.0
+      - name: uv tool install rumo-cli
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          uv tool install "rumo-cli${VERSION:+==$VERSION}"
+          uv tool dir --bin >> "$GITHUB_PATH"
+      - name: Smoke test
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          python="$(uv tool dir)/rumo-cli/bin/python"
+          [ -x "$python" ] || python="$(uv tool dir)/rumo-cli/Scripts/python.exe"
+          scripts/smoke_test.sh "$VERSION" "$python"
+
+  pipx:
+    name: pipx (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: pipx install rumo-cli
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          command -v pipx >/dev/null || brew install pipx
+          pipx install "rumo-cli${VERSION:+==$VERSION}"
+          pipx environment --value PIPX_BIN_DIR >> "$GITHUB_PATH"
+      - name: Smoke test
+        env:
+          VERSION: ${{ inputs.version }}
+        run: scripts/smoke_test.sh "$VERSION" "$(pipx environment --value PIPX_LOCAL_VENVS)/rumo-cli/bin/python"
+
+  plugin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Unpinned on purpose: the point is to catch a Claude Code release that breaks the plugin.
+      - name: Install Claude Code
+        run: npm install --global @anthropic-ai/claude-code  # zizmor: ignore[adhoc-packages]
+      - name: Add the marketplace from GitHub and install the plugin
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          claude plugin marketplace add pedrobuzzi/rumo
+          claude plugin install rumo@rumo
+          listing="$(claude plugin list)"
+          echo "$listing"
+          grep -q "rumo@rumo" <<<"$listing"
+          if [ -n "$VERSION" ]; then grep -q "Version: $VERSION" <<<"$listing"; fi
