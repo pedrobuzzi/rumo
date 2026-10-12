@@ -4,14 +4,17 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
+import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
+from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -25,8 +28,10 @@ from rumo.items import Item, WriteConflict
 
 # Color only ever means the group, so a status is a shape: full when active, empty when not started.
 SHAPES = {"doing": "●", "waiting": "◐", "idea": "○", "paused": "◌", "done": "✓"}
-VIEWS = {"timeline": "Timeline", "grouped": "Grouped", "projects": "Projects"}
-UNGROUPED = "-"  # the "No group" block, which always comes last
+VIEWS = {"timeline": "Timeline", "projects": "Projects", "repos": "Repos"}
+HORIZONS: tuple[str, ...] = ("past", "now", "later")
+UNGROUPED = "-"  # the "No group" or "No repo" block, which always comes last
+MAX_LABEL = 16  # the project label fits the longest group name up to this many characters
 NEW_GROUP = "+new"
 NO_GROUP = "-none"
 
@@ -56,6 +61,45 @@ def short_date(stamp: str) -> str:
         return f"{MONTHS[int(stamp[5:7]) - 1]} {stamp[8:10]}"
     except (ValueError, IndexError):
         return stamp[:10]
+
+
+EMPTY = {
+    "past": f"Nothing finished in the last {items.PAST_WINDOW_DAYS} days.",
+    "now": "Nothing in progress. Press l to see what is next.",
+    "later": "Nothing for later. Press n to capture an idea.",
+}
+
+
+def repo_of(item: Item) -> str:
+    """The repository of the item's latest session, without the branch: `web-app (main)` -> `web-app`."""
+    return re.sub(r"\s*\([^)]*\)$", "", item.sessions[-1].repo).strip() if item.sessions else ""
+
+
+def display_title(title: str, project: str) -> str:
+    """Drop a leading project name that the label already shows: `PhraseDay: ASO` -> `ASO`.
+
+    The name is compared without case, accents, spaces or punctuation, so `Word Fall 1.3: cesta`
+    loses `Word Fall` for the project `WordFall`. The file keeps the full title.
+    """
+    want = _letters(project)
+    if not want:
+        return title
+    i = matched = 0
+    while i < len(title) and matched < len(want):
+        letter = _letters(title[i])
+        if letter:
+            if letter != want[matched : matched + len(letter)]:
+                return title
+            matched += len(letter)
+        i += 1
+    if matched < len(want) or (i < len(title) and title[i].isalnum()):
+        return title
+    rest = title[i:].lstrip(" :-–—·|/")
+    return rest or title
+
+
+def _letters(text: str) -> str:
+    return re.sub(r"[^0-9a-z]", "", unicodedata.normalize("NFKD", text).encode("ascii", "ignore").decode().lower())
 
 
 # ---------- pickers ----------
@@ -253,7 +297,8 @@ class RumoApp(App):
     #filter { display: none; }
     #filter.on { display: block; }
     #main { height: 1fr; }
-    #timeline { width: 45%; height: 1fr; border: round $primary-darken-1; }
+    #timeline { width: 55%; height: 1fr; border: round $primary-darken-1; }
+    #timeline > .option-list--option-disabled { color: $text; }
     #timeline:focus { border: round $primary; }
     #detail { border: round $secondary-darken-1; padding: 0 1; }
     #header { margin-bottom: 1; }
@@ -271,10 +316,10 @@ class RumoApp(App):
         Binding("q", "quit", "quit"),
         Binding("v", "next_view", "view"),
         Binding("1", "view('timeline')", show=False),
-        Binding("2", "view('grouped')", show=False),
-        Binding("3", "view('projects')", show=False),
-        Binding("p", "toggle_past", "past"),
-        Binding("l", "toggle_later", "later"),
+        Binding("2", "view('projects')", show=False),
+        Binding("3", "view('repos')", show=False),
+        Binding("p", "horizon('past')", "past"),
+        Binding("l", "horizon('later')", "later"),
         Binding("s", "status", "status"),
         Binding("g", "group", "group"),
         Binding("t", "tags", "tags"),
@@ -295,8 +340,7 @@ class RumoApp(App):
         self.filter_text = ""
         self.show_older = False
         self.view = "timeline"
-        self.past_open = True
-        self.later_open = True
+        self.horizon = "now"  # one horizon at a time; never remembered, rumo always opens on Now
         self.mtimes: dict[str, float] = {}
         self.load_state()
 
@@ -375,100 +419,102 @@ class RumoApp(App):
         visible = [i for i in self.items.values() if self.matches(i)]
         tl = items.timeline(visible, today=self.today, show_older=self.show_older)
 
-        # A filter opens collapsed sections, so that no match stays hidden.
+        # One horizon at a time; a filter shows all three, so that no match stays hidden.
         filtering = bool(self.filter_text.strip())
-        past_open, later_open = self.past_open or filtering, self.later_open or filtering
-
-        options: list[Option] = []
+        shown = list(HORIZONS) if filtering else [self.horizon]
+        build = {"timeline": self.timeline_rows, "projects": self.project_rows, "repos": self.repo_rows}[self.view]
         if not self.items:
-            options.append(Option(Text(
-                "No items yet. Press n to capture an idea, or run /rumo new in an agent session.", "dim"
-            ), id="empty", disabled=True))
-        build = {"timeline": self.timeline_rows, "grouped": self.grouped_rows, "projects": self.project_rows}[self.view]
-        options += build(tl, past_open, later_open)
+            options = [self.message("No items yet. Press n to capture an idea, or run /rumo new in an agent session.")]
+        else:
+            options = build(tl, shown) or [self.message("No matches." if filtering else EMPTY[self.horizon])]
 
         timeline.clear_options()
         timeline.add_options(options)
         timeline.border_title = self.view_tabs()
+        timeline.border_subtitle = self.horizon_tabs(tl)
 
-        ids = [o.id for o in options]
+        ids = [o.id or "" for o in options]
         target = f"item:{self.current}" if self.current else None
         if target not in ids:
-            first_now = f"item:{tl.now[0].slug}" if tl.now else None
-            first_any = next((i for i in ids if i and i.startswith("item:")), None)
-            target = first_now or first_any
+            target = next((i for i in ids if i.startswith("item:")), None)
         self.current = target.removeprefix("item:") if target else None
         if target:
             timeline.highlighted = ids.index(target)
 
-    # Timeline: one list by time; a bar in the group color starts each row, titles stay plain.
-    def timeline_rows(self, tl: items.Timeline, past_open: bool, later_open: bool) -> list[Option]:
-        def flat(next_step: bool = False) -> Callable[[list[Item]], list[Option]]:
-            return lambda its: [self.item_option(i, bar=True, next_step=next_step) for i in its]
+    def horizons(self, tl: items.Timeline) -> dict[str, list[Item]]:
+        return {"past": tl.past, "now": tl.now, "later": tl.later}
 
-        return [
-            *self.section("past", tl.past, tl.older, past_open, flat()),
-            *self.section("now", tl.now, 0, True, flat(next_step=True)),
-            *self.section("later", tl.later, 0, later_open, flat()),
-        ]
-
-    # Grouped: Past by date with titles in the group color; Now and Later in one block per group.
-    def grouped_rows(self, tl: items.Timeline, past_open: bool, later_open: bool) -> list[Option]:
-        return [
-            *self.section("past", tl.past, tl.older, past_open, lambda its: [self.item_option(i, colored=True) for i in its]),
-            *self.section("now", tl.now, 0, True, lambda its: self.group_blocks("now", its, next_step=True)),
-            *self.section("later", tl.later, 0, later_open, lambda its: self.group_blocks("later", its)),
-        ]
-
-    def group_blocks(self, section: str, its: list[Item], next_step: bool = False) -> list[Option]:
-        rows = []
-        for key, group, members in self.by_group(its):
-            rows.append(Option(self.group_label(group, str(len(members))), id=f"group:{section}:{key}", disabled=True))
-            rows += [self.item_option(i, colored=True, indent=1, next_step=next_step) for i in members]
-        return rows
-
-    # Projects: one block per group holding its Past, Now and Later items.
-    def project_rows(self, tl: items.Timeline, past_open: bool, later_open: bool) -> list[Option]:
-        rows = []
-        if past_open and tl.older:
-            rows.append(self.older_option(tl.older, "older done items"))
-        for key, group, members in self.by_group([*tl.past, *tl.now, *tl.later]):
-            parts = {
-                "past": [i for i in members if i.status == "done"],
-                "now": [i for i in members if i.status in ("doing", "waiting")],
-                "later": [i for i in members if i.status in ("paused", "idea")],
-            }
-            shown = {"past": past_open, "now": True, "later": later_open}
-            counts = " · ".join(f"{len(its)} {name}{'' if shown[name] else ' ▸'}" for name, its in parts.items() if its)
-            rows.append(Option(self.group_label(group, counts), id=f"group:{key}", disabled=True))
-            for name, its in parts.items():
-                if shown[name]:
-                    rows += [self.item_option(i, indent=1, next_step=name == "now") for i in its]
-        return rows
-
-    def section(
-        self, key: str, its: list[Item], older: int, is_open: bool, body: Callable[[list[Item]], list[Option]]
-    ) -> list[Option]:
-        if not its and not older:
-            return []
-        name = key.capitalize()
-        if key == "now":
-            label = Text.assemble(("  ", ""), (name, "bold"), (f"  {len(its)}", "dim"))
-        elif is_open:
-            note = ("all" if self.show_older else f"last {items.PAST_WINDOW_DAYS} days") if key == "past" else str(len(its))
-            label = Text.assemble(("▾ ", "dim"), (name, "bold"), (f"  {note}", "dim"))
-        else:
-            label = Text.assemble(("▸ ", "dim"), (name, "bold"), (f"  {len(its) + older} hidden · {key[0]} opens", "dim"))
-        rows = [Option(label, id=f"header:{key}", disabled=True)]
-        if is_open:
+    # Timeline: the items of the horizon; in Now, items of the same project sit together.
+    def timeline_rows(self, tl: items.Timeline, shown: list[str]) -> list[Option]:
+        horizons = self.horizons(tl)
+        horizons["now"] = [i for _, _, members in self.by_group(tl.now) for i in members]
+        rows: list[Option] = []
+        for horizon in shown:
+            its = horizons[horizon]
+            older = tl.older if horizon == "past" else 0
+            if len(shown) > 1:
+                if not its and not older:
+                    continue
+                rows.append(Option(Text(horizon.capitalize(), "bold"), id=f"header:{horizon}", disabled=True))
             if older:
-                rows.append(self.older_option(older, "older"))
-            rows += body(its)
+                rows.append(self.older_option(older))
+            rows += [self.item_option(i) for i in its]
+        return rows
+
+    # Projects: one block per group; the block line carries the label, so rows drop it.
+    def project_rows(self, tl: items.Timeline, shown: list[str]) -> list[Option]:
+        blocks = [(f"project:{key}", self.label(group) if group else Text("No group", "bold dim"), members)
+                  for key, group, members in self.by_group([*tl.past, *tl.now, *tl.later])]
+        return self.block_rows(tl, shown, blocks, label=False)
+
+    # Repos: one block per repository of the item's latest session; rows keep the project label.
+    def repo_rows(self, tl: items.Timeline, shown: list[str]) -> list[Option]:
+        buckets: dict[str, list[Item]] = {}
+        for i in [*tl.past, *tl.now, *tl.later]:
+            buckets.setdefault(repo_of(i) or UNGROUPED, []).append(i)
+        keys = sorted(k for k in buckets if k != UNGROUPED) + ([UNGROUPED] if UNGROUPED in buckets else [])
+        blocks = [(f"repo:{key}", Text("No repo", "bold dim") if key == UNGROUPED else Text(key, "bold"), buckets[key])
+                  for key in keys]
+        return self.block_rows(tl, shown, blocks, label=True)
+
+    def block_rows(
+        self, tl: items.Timeline, shown: list[str], blocks: list[tuple[str, Text, list[Item]]], label: bool
+    ) -> list[Option]:
+        horizons = self.horizons(tl)
+        rows: list[Option] = []
+        if "past" in shown and tl.older:
+            rows.append(self.older_option(tl.older))
+        for block_id, head, members in blocks:
+            slugs = {i.slug for i in members}
+            its = [i for horizon in shown for i in horizons[horizon] if i.slug in slugs]
+            if not its:
+                continue
+            counts = " · ".join(
+                f"{n} {horizon}" for horizon in ("now", "later", "past")
+                if (n := sum(i.slug in slugs for i in horizons[horizon]))
+            )
+            rows.append(Option(self.block(head, counts, gap=bool(rows)), id=block_id, disabled=True))
+            rows += [self.item_option(i, label=label) for i in its]
         return rows
 
     @staticmethod
-    def older_option(count: int, what: str) -> Option:
-        return Option(Text(f"  … {count} {what} (enter to show)", "dim italic"), id="older")
+    def block(head: Text, counts: str, gap: bool) -> Table:
+        grid = Table.grid(padding=(0, 1), expand=True)
+        grid.add_column(no_wrap=True)
+        grid.add_column(ratio=1, no_wrap=True, overflow="crop")
+        grid.add_column(no_wrap=True, justify="right")
+        if gap:
+            grid.add_row("", "", "")
+        grid.add_row(head, Text("─" * 400, "dim"), Text(counts, "dim"))
+        return grid
+
+    @staticmethod
+    def message(text: str) -> Option:
+        return Option(Text(text, "dim"), id="empty", disabled=True)
+
+    @staticmethod
+    def older_option(count: int) -> Option:
+        return Option(Text(f"… {count} older (enter to show)", "dim italic"), id="older")
 
     def by_group(self, its: list[Item]) -> list[tuple[str, config.Group | None, list[Item]]]:
         """Items bucketed by group, in config order, with ungrouped (or unknown-group) items last."""
@@ -477,29 +523,41 @@ class RumoApp(App):
             buckets.setdefault(i.group if i.group in self.cfg.groups else UNGROUPED, []).append(i)
         return [(key, self.cfg.groups.get(key), buckets[key]) for key in [*self.cfg.groups, UNGROUPED] if key in buckets]
 
-    @staticmethod
-    def group_label(group: config.Group | None, note: str) -> Text:
+    @property
+    def name_width(self) -> int:
+        return min(max((len(g.name) for g in self.cfg.groups.values()), default=0), MAX_LABEL)
+
+    def label(self, group: config.Group | None) -> Text:
+        """The project label: the name on its color, as wide as the longest name; blank without a group."""
+        width = self.name_width
         if group is None:
-            return Text.assemble(("No group", "bold dim"), (f"  {note}", "dim"))
-        return Text.assemble((group.name, f"bold {config.PALETTE.get(group.color, '')}"), (f"  {note}", "dim"))
+            return Text(" " * (width + 2))
+        name = group.name if len(group.name) <= width else group.name[: width - 1].rstrip() + "…"
+        color = config.PALETTE.get(group.color)
+        return Text(f" {name:<{width}} ", f"bold #0d1118 on {color}" if color else "bold reverse")
 
-    def item_option(self, item: Item, bar: bool = False, colored: bool = False, indent: int = 0, next_step: bool = False) -> Option:
-        return Option(self.row(item, bar, colored, indent, next_step), id=f"item:{item.slug}")
+    def item_option(self, item: Item, label: bool = True) -> Option:
+        return Option(self.row(item, label), id=f"item:{item.slug}")
 
-    def row(self, item: Item, bar: bool, colored: bool, indent: int, next_step: bool) -> Text:
-        color = self.group_color(item)
-        text = Text(" " * indent)
-        if bar:
-            text.append("▌ " if color else "  ", color)
-        label = short_date(item.done_at) if item.status == "done" else item.status
-        text.append_text(status_text(item.status, f"{label:<8}"))
-        text.append(item.title, color if colored else "")
-        if item.steps:
-            done = sum(s.done for s in item.steps)
-            text.append(f"  {done}/{len(item.steps)}", "dim")
-        if next_step and (step := item.next_step):
-            text.append("\n" + " " * (indent + (2 if bar else 0) + 10) + f"↳ {step.text}", "dim")
-        return text
+    def row(self, item: Item, label: bool) -> Table:
+        """Symbol, project label, title and progress (or the date in Past) on one line; the next step below."""
+        group = self.cfg.groups.get(item.group)
+        grid = Table.grid(padding=(0, 1), expand=True)
+        grid.add_column(width=1, no_wrap=True)
+        if label:
+            grid.add_column(width=self.name_width + 2, no_wrap=True)
+        grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        grid.add_column(width=6, no_wrap=True, justify="right")
+        if item.status == "done":
+            right = short_date(item.done_at)
+        else:
+            right = f"{sum(s.done for s in item.steps)}/{len(item.steps)}" if item.steps else ""
+        symbol = Text(SHAPES[item.status], "" if item.status == "doing" else "dim")
+        title = Text(display_title(item.title, group.name if group else ""))
+        grid.add_row(symbol, *([self.label(group)] if label else []), title, Text(right, "dim"))
+        if item.status != "done" and (step := item.next_step):
+            grid.add_row("", *([""] if label else []), Text(f"↳ {step.text}", "dim"), "")
+        return grid
 
     def view_tabs(self) -> Text:
         text = Text(" ")
@@ -508,16 +566,19 @@ class RumoApp(App):
             text.append("  " if n < len(VIEWS) else " ")
         return text
 
+    def horizon_tabs(self, tl: items.Timeline) -> Text:
+        counts = {horizon: len(its) for horizon, its in self.horizons(tl).items()}
+        text = Text(" ")
+        for horizon, key in (("past", "p "), ("now", ""), ("later", "l ")):
+            text.append(f"{key}{horizon.capitalize()} {counts[horizon]}", "bold" if horizon == self.horizon else "dim")
+            text.append(" " if horizon == "later" else "  ")
+        return text
+
     def legend(self) -> Text:
         text = Text()
         if self.cfg.error:
             text.append(f"Config error, using defaults: {self.cfg.error}\n", "bold red")
-        if not self.cfg.groups:
-            return text.append("No groups yet. Press g on an item to create one.", "dim")
-        for group in self.cfg.groups.values():
-            text.append("▌ ", config.PALETTE.get(group.color, ""))
-            text.append(group.name + "    ")
-        return text
+        return text.append("  ".join(f"{shape} {status}" for status, shape in SHAPES.items()), "dim")
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id != "timeline":
@@ -553,8 +614,8 @@ class RumoApp(App):
 
         line = Text.assemble((item.title, "bold"), "\n", status_text(item.status))
         if group := self.cfg.groups.get(item.group):
-            line.append("   group ", "dim")
-            line.append(f"▌ {group.name}", config.PALETTE.get(group.color, ""))
+            line.append("   ")
+            line.append_text(self.label(group))
         if item.tags:
             line.append("   tags ", "dim")
             for tag in item.tags:
@@ -594,23 +655,18 @@ class RumoApp(App):
 
     def action_view(self, view: str) -> None:
         self.view = view
-        self.layout_changed()
-
-    def action_toggle_past(self) -> None:
-        self.past_open = not self.past_open
-        self.layout_changed()
-
-    def action_toggle_later(self) -> None:
-        self.later_open = not self.later_open
-        self.layout_changed()
-
-    def layout_changed(self) -> None:
         self.save_state()
         self.build_timeline()
         self.show_detail()
 
-    # The view and collapsed sections survive restarts, in a file of their own: config.toml only
-    # ever changes when the user edits a group.
+    def action_horizon(self, horizon: str) -> None:
+        """`p` shows Past and `p` again goes back to Now; `l` does the same for Later."""
+        self.horizon = "now" if self.horizon == horizon else horizon
+        self.build_timeline()
+        self.show_detail()
+
+    # The view survives restarts, in a file of its own: config.toml only ever changes when the
+    # user edits a group.
     def state_path(self) -> Path:
         return self.config_path.parent / "state.json"
 
@@ -619,17 +675,11 @@ class RumoApp(App):
             data = json.loads(self.state_path().read_text(encoding="utf-8"))
         except (OSError, ValueError):
             return
-        if not isinstance(data, dict):
-            return
-        if data.get("view") in VIEWS:
+        if isinstance(data, dict) and data.get("view") in VIEWS:
             self.view = data["view"]
-        if isinstance(past_open := data.get("past_open"), bool):
-            self.past_open = past_open
-        if isinstance(later_open := data.get("later_open"), bool):
-            self.later_open = later_open
 
     def save_state(self) -> None:
-        state = {"view": self.view, "past_open": self.past_open, "later_open": self.later_open}
+        state = {"view": self.view}
         try:
             self.state_path().write_text(json.dumps(state) + "\n", encoding="utf-8")
         except OSError:
@@ -739,6 +789,7 @@ class RumoApp(App):
             if title:
                 path = items.create_idea(self.cfg.folder, title, now=datetime.now())
                 self.current = path.stem
+                self.horizon = "later"
                 self.reload()
 
         self.push_screen(TextScreen("New idea", "a short title"), created)

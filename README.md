@@ -10,10 +10,12 @@ Timeline, and let your AI agent sessions keep it up to date while you work.
 - **Past**: what you finished in the last two weeks (answers "what did I do?" for a standup).
 - **Later**: ideas and paused work, so nothing you meant to do gets lost.
 
-Items can belong to a **group** (an initiative), shown in its own color; color in rumo only ever
-means the group. Switch between three views: the **Timeline** by date, **Grouped** (Now and Later
-split by group) and **Projects** (one block per group). The interface is in English; the content
-(titles, notes, steps) is in your own language.
+Items can belong to a **group** (a project or initiative), shown as a label with its name on its
+color; color in rumo only ever means the group. One item is one line, plus its next step. rumo shows
+one horizon at a time (Now, or Past with `p`, or Later with `l`) in three views: the **Timeline**,
+**Projects** (one block per group) and **Repos** (one block per repository of the item's latest
+agent session). The interface is in English; the content (titles, notes, steps) is in your own
+language.
 
 Nothing leaves your machine. There is no server, no database and no sync with Jira or ClickUp
 (ask your agent to update those if you want).
@@ -61,8 +63,8 @@ system language.
 |---|---|
 | ↑ ↓ | move through the list |
 | Tab | switch between the list, steps and sessions |
-| `v` | next view: Timeline, Grouped, Projects (`1` `2` `3` go straight to one) |
-| `p` / `l` | collapse or expand Past / Later (rumo remembers the view and what is collapsed) |
+| `v` | next view: Timeline, Projects, Repos (`1` `2` `3` go straight to one; rumo remembers it) |
+| `p` / `l` | show Past / Later; press again to go back to Now |
 | `s` | change status (1-5 picks directly) |
 | `g` | set the group or create one; inside, `r` renames, `c` recolors and `d` deletes the highlighted group (its items stay) |
 | `t` | toggle tags |
@@ -146,8 +148,8 @@ name = "Auth migration"
 color = "blue"         # blue, green, yellow, orange, red, magenta, purple, cyan
 ```
 
-Groups appear in the order of this file in every view. The view and the collapsed sections are
-remembered in `state.json`, next to `config.toml`.
+Groups appear in the order of this file in every view. The last view is remembered in
+`state.json`, next to `config.toml`.
 
 `RUMO_DIR` and `RUMO_CONFIG` override the folder and the config path.
 
