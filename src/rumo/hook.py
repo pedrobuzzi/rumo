@@ -1,14 +1,17 @@
 """Claude Code hooks: keep the items a session works on up to date, and offer rumo for untracked work.
 
-The plugin sends two events to `rumo hook`:
+The plugin sends three events to `rumo hook`:
 
+- SessionStart: a session without an item learns what is in progress in its repository, so it can
+  answer "what is left?" (see `session_start`).
 - UserPromptSubmit: remind a linked session of its items and the update rules. The link is the
   session id written in an item's Sessions section (by `/rumo new` or `/rumo link`). A line
   ending in `| closed` (from park/unlink) no longer links, and after `/clear` the id changes, so
-  the reminder stops on its own.
+  the reminder stops on its own. Steps changed since the agent's last answer (in the TUI, an
+  editor or another session) are pointed out once.
 - Stop: at the end of a turn that did work, check that it reached the items. A linked session
   whose items did not change gets one more nudge. A session without items that edited files is
-  asked once whether to track it (see `untracked`).
+  asked once whether to track it (see `untracked`). Either way, note the steps the agent has seen.
 
 The messages carry the rules, so they reach the agent exactly when they matter and nothing has to be
 added to the user's global instructions. Runs on every prompt and every stop: stdlib only, UTF-8
@@ -40,10 +43,15 @@ RULES = (
     "(one line: where it stands or what blocks it) only if that changed, and keep Context to at most 3 "
     "lines. Conversation-only replies need no update. Write content in the configured language (`rumo "
     "index`); keep keys, sections, statuses and tags in English. Never set `done` without every step "
-    "checked and the user's confirmation. To stop updating from this session, append `| closed` to its "
-    "line in Sessions."
+    "checked and the user's confirmation. When you check off the step you were working on and the item "
+    "still has open steps, end your response with one line in the user's language naming the next one: for "
+    "an `[agent]` step offer to start it (\"Next in rumo: <step>. Want me to start?\"), for a `[manual]` step "
+    "say it is theirs (\"Next in rumo (yours): <step>.\"). To stop updating from this session, append "
+    "`| closed` to its line in Sessions."
 )
 SHOWN_STEPS = 3
+SHOWN_ITEMS = 3  # in progress in this repository, at session start
+SEEN_SESSIONS = 20  # sessions whose last seen steps are kept, to tell what changed outside them
 
 WORK_TOOLS = {"Edit", "Write", "NotebookEdit", "Bash"}  # a linked turn with these should reach its items
 EDIT_TOOLS = {"Edit", "Write", "NotebookEdit"}  # an untracked session is worth asking about once it edits
@@ -89,10 +97,102 @@ def linked_items(cfg: config.Config, session_id: str) -> list[items.Item]:
 
 
 def reminder(cfg: config.Config, session_id: str) -> str:
-    linked = [f"{item.path} (status: {item.status}). {open_steps(item)}" for item in linked_items(cfg, session_id)]
+    linked = linked_items(cfg, session_id)
     if not linked:
         return ""
-    return "This session is linked to rumo item(s): " + " ".join(linked) + " " + RULES.format(create=how_to_create()) + "\n"
+    seen = seen_steps(cfg, session_id)
+    lines = []
+    for item in linked:
+        lines.append(f"{item.path} (status: {item.status}). {open_steps(item)}")
+        if str(item.path) in seen and (changes := outside_changes(item, seen[str(item.path)])):
+            lines.append(changes)
+    if seen:  # only once the Stop hook keeps them: an older plugin without it would flag the agent's own edits
+        remember_steps(cfg, session_id, linked)
+    return "This session is linked to rumo item(s): " + " ".join(lines) + " " + RULES.format(create=how_to_create()) + "\n"
+
+
+def seen_steps(cfg: config.Config, session_id: str) -> dict:
+    """The steps of each linked item as the agent last saw them: {item path: [[done, kind, text], ...]}."""
+    seen = config.load_state(cfg.path).get("steps_seen")
+    session = seen.get(session_id) if isinstance(seen, dict) else None
+    return session if isinstance(session, dict) else {}
+
+
+def remember_steps(cfg: config.Config, session_id: str, linked: list[items.Item], keep: set[str] = frozenset()) -> None:
+    """Note the steps the agent has now seen; items in `keep` hold on to what it saw before."""
+    seen = config.load_state(cfg.path).get("steps_seen")
+    seen = seen if isinstance(seen, dict) else {}
+    before = seen.pop(session_id, None)
+    before = before if isinstance(before, dict) else {}
+    seen[session_id] = {
+        str(item.path): before[str(item.path)] if str(item.path) in keep and str(item.path) in before
+        else [[s.done, s.kind, s.text] for s in item.steps]
+        for item in linked
+    }
+    config.update_state(cfg.path, steps_seen=dict(list(seen.items())[-SEEN_SESSIONS:]))
+
+
+def outside_changes(item: items.Item, before: object) -> str:
+    """What changed in the item's steps since the agent last saw them, in one message (or "")."""
+    was: dict[str, tuple[bool, str]] = {}
+    for entry in before if isinstance(before, list) else []:
+        if isinstance(entry, list) and len(entry) == 3:
+            was[str(entry[2])] = (bool(entry[0]), str(entry[1]))
+    now = {s.text for s in item.steps}
+    found = {
+        "Added": [s.label for s in item.steps if s.text not in was],
+        "Removed (do not add them back)": [
+            items.Step(done, kind, text, 0).label for text, (done, kind) in was.items() if text not in now
+        ],
+        "Checked": [s.label for s in item.steps if s.text in was and s.done and not was[s.text][0]],
+        "Unchecked": [s.label for s in item.steps if s.text in was and not s.done and was[s.text][0]],
+    }
+    parts = [f"{name}: {'; '.join(labels)}." for name, labels in found.items() if labels]
+    if not parts:
+        return ""
+    return (
+        f"The steps of {item.path.name} changed outside this session since your last response (by the user in "
+        "the rumo TUI or an editor, or by another session). " + " ".join(parts) + " Take this into account, "
+        "and do not start a new step unless the user asks."
+    )
+
+
+def session_start(cfg: config.Config, session_id: str, payload: dict) -> str:
+    """Tell a session without an item what is in progress here, so "what is left?" has an answer."""
+    every = items.list_items(cfg.folder)
+    if any(s.id == session_id and not s.closed for item in every for s in item.sessions):
+        return ""  # linked (a resumed session): the prompt reminder already lists its steps
+    in_progress = items.timeline(every).now
+    if not in_progress:
+        return ""
+    cwd = Path(str(payload.get("cwd") or os.getcwd())).resolve()
+    root = repo_root(cwd)
+
+    def started_here(folder: str) -> bool:
+        path = Path(folder).resolve()
+        return path.is_relative_to(root) if root else path == cwd
+
+    here = [item for item in in_progress if any(started_here(s.folder) for s in item.sessions)]
+    if not here:
+        return (
+            f"rumo: {len(in_progress)} {'item' if len(in_progress) == 1 else 'items'} in progress, none from this "
+            "repository. If the user asks what is pending or what to do next, run `rumo now`."
+        )
+    shown = [
+        f"{item.title} ({item.status}; next: {item.next_step.label if item.next_step else 'no open steps'})"
+        for item in here[:SHOWN_ITEMS]
+    ]
+    more = len(here) - SHOWN_ITEMS
+    return (
+        "rumo: in progress in this repository, not linked to this session: " + "; ".join(shown)
+        + (f" (+{more} more)" if more > 0 else "") + ". If the user asks what is pending or what to do next, "
+        "answer from this; `rumo now` lists everything in progress with each item's file. Do not start any of "
+        "it unless the user asks; to continue one in this session, they can type `/rumo link`."
+    )
+
+
+def repo_root(folder: Path) -> Path | None:
+    return next((f for f in (folder, *folder.parents) if (f / ".git").exists()), None)
 
 
 @dataclass
@@ -167,13 +267,17 @@ def changed_since(path: Path, since: datetime | None) -> bool:
 
 
 def stop(cfg: config.Config, session_id: str, payload: dict) -> str:
-    if payload.get("stop_hook_active"):
-        return ""  # this stop already comes from a nudge: never insist twice in a row
-    transcript = payload.get("transcript_path")
-    if not transcript:
-        return ""
-    turn = last_turn(Path(transcript))
     linked = linked_items(cfg, session_id)
+    transcript = payload.get("transcript_path")
+    turn = last_turn(Path(transcript)) if transcript else None
+    if linked:
+        # An item the agent did not edit in this turn keeps the steps it saw before, so a step the user
+        # added meanwhile is still pointed out on the next prompt.
+        edited = {str(Path(str(t)).resolve()) for name, i in (turn.tools if turn else []) if name in EDIT_TOOLS
+                  if (t := i.get("file_path"))}
+        remember_steps(cfg, session_id, linked, keep={str(i.path) for i in linked if str(i.path.resolve()) not in edited})
+    if payload.get("stop_hook_active") or turn is None:
+        return ""  # a stop that comes from a nudge: never insist twice in a row
     if not linked:
         return untracked(cfg, session_id, turn)
     if not any(name in WORK_TOOLS and not only_looks(name, tool_input) for name, tool_input in turn.tools):
@@ -281,12 +385,13 @@ def main() -> None:
         return
 
     cfg = config.load()
-    if event == "Stop":
+    handlers = {"Stop": stop, "SessionStart": session_start}
+    if event in handlers:
         try:
-            message = stop(cfg, session_id, payload)
+            message = handlers[event](cfg, session_id, payload)
         except Exception:  # a hook must never break the session; stay silent instead
             return
-        output = json.dumps({"hookSpecificOutput": {"hookEventName": "Stop", "additionalContext": message}}) if message else ""
+        output = json.dumps({"hookSpecificOutput": {"hookEventName": event, "additionalContext": message}}) if message else ""
     else:
         output = reminder(cfg, session_id)
     if output:

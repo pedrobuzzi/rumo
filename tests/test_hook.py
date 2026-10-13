@@ -230,6 +230,138 @@ class StopHookTest(unittest.TestCase):
                                 capture_output=True, text=True, encoding="utf-8", env=self.env)
         self.assertEqual(result.returncode, 2)
 
+    # Steps changed outside the session (the rumo TUI, an editor, another session)
+
+    def prompt(self, session: str) -> str:
+        result = subprocess.run([sys.executable, "-m", "rumo.cli", "hook"], input=json.dumps({"session_id": session}),
+                                capture_output=True, text=True, encoding="utf-8", env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        return result.stdout
+
+    def edit_item(self, old: str, new: str) -> None:
+        self.item.write_text(self.item.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
+
+    def test_the_next_prompt_says_which_steps_changed_since_the_last_answer(self):
+        self.stop("open-session")
+        self.edit_item("- [ ] [agent] Atualizar a doc\n", "- [ ] [manual] Avisar o suporte\n")
+        self.edit_item("- [ ] [manual] Pedir review da PR", "- [x] [manual] Pedir review da PR")
+        reminder = self.prompt("open-session")
+        self.assertIn("changed outside this session", reminder)
+        self.assertIn("Added: [manual] Avisar o suporte", reminder)
+        self.assertIn("Removed (do not add them back): [agent] Atualizar a doc", reminder)
+        self.assertIn("Checked: [manual] Pedir review da PR", reminder)
+        self.assertIn("do not start", reminder)
+        self.assertNotIn("changed outside", self.prompt("open-session"))  # said once
+
+    def test_nothing_to_say_before_the_first_answer_or_when_nothing_changed(self):
+        self.assertNotIn("changed outside", self.prompt("open-session"))
+        self.stop("open-session", tool("Bash", command="make"), active=True)  # a stop after a nudge counts too
+        self.assertNotIn("changed outside", self.prompt("open-session"))
+
+    def test_a_step_added_while_the_agent_worked_on_something_else_is_still_pointed_out(self):
+        self.stop("open-session")
+        self.edit_item("- [ ] [agent] Atualizar a doc\n", "- [ ] [agent] Atualizar a doc\n- [ ] [agent] Medir a home\n")
+        self.stop("open-session", tool("Edit", file_path="/repo/app.py"))
+        self.assertIn("Added: [agent] Medir a home", self.prompt("open-session"))
+
+    def test_the_agents_own_step_edits_are_not_pointed_out(self):
+        self.stop("open-session")
+        self.edit_item("- [ ] [manual] Pedir review da PR", "- [x] [manual] Pedir review da PR")
+        self.stop("open-session", tool("Edit", file_path=str(self.item)))
+        self.assertNotIn("changed outside", self.prompt("open-session"))
+
+    def test_unchecking_a_step_is_reported_too(self):
+        self.stop("open-session")
+        self.edit_item("- [x] [agent] Ajustar o handler", "- [ ] [agent] Ajustar o handler")
+        self.assertIn("Unchecked: [agent] Ajustar o handler", self.prompt("open-session"))
+
+    def test_the_rules_ask_to_name_the_next_step_after_finishing_one(self):
+        reminder = self.prompt("open-session")
+        self.assertIn("Next in rumo", reminder)
+        self.assertIn("(yours)", reminder)
+
+    # Session start: what is in progress, so the agent can answer "what is left?"
+
+    def repo(self, name: str = "web-app") -> Path:
+        repo = self.root / name
+        (repo / ".git").mkdir(parents=True)
+        (repo / "src").mkdir()
+        return repo
+
+    def add_item(self, slug: str, status: str, folder: Path | str, steps: str = "", session: str = "old") -> None:
+        (self.folder / f"{slug}.md").write_text(
+            f"---\ntitle: {slug.title()}\nstatus: {status}\nupdated: 2026-10-12 {len(slug):02d}:00\n---\n\n"
+            f"## Steps\n{steps}\n## Sessions\n- 2026-10-11 10:08 | r (main) | {session} | {folder}\n",
+            encoding="utf-8",
+        )
+
+    def session_start(self, session: str, cwd: Path) -> str:
+        payload = {"session_id": session, "hook_event_name": "SessionStart", "source": "startup", "cwd": str(cwd)}
+        result = subprocess.run([sys.executable, "-m", "rumo.cli", "hook"], input=json.dumps(payload),
+                                capture_output=True, text=True, encoding="utf-8", env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        if not result.stdout:
+            return ""
+        output = json.loads(result.stdout)["hookSpecificOutput"]
+        self.assertEqual(output["hookEventName"], "SessionStart")
+        return output["additionalContext"]
+
+    def test_a_new_session_learns_what_is_in_progress_in_its_repository(self):
+        repo = self.repo()
+        self.add_item("checkout", "doing", repo / "src", "- [x] [agent] Feito\n- [ ] [manual] Testar no celular\n")
+        self.add_item("billing", "waiting", repo, "- [ ] [agent] Trocar a chave\n")
+        self.add_item("cache", "idea", repo)
+        self.add_item("other-repo", "doing", self.root / "elsewhere")
+        message = self.session_start("new-session", repo / "src")
+        self.assertIn("Checkout (doing; next: [manual] Testar no celular)", message)
+        self.assertIn("Billing (waiting; next: [agent] Trocar a chave)", message)
+        self.assertNotIn("Cache", message)
+        self.assertNotIn("Other-Repo", message)
+        self.assertIn("rumo now", message)
+        self.assertIn("/rumo link", message)
+
+    def test_shows_at_most_three_items(self):
+        repo = self.repo()
+        for slug in ("a1", "a22", "a333", "a4444", "a55555"):
+            self.add_item(slug, "doing", repo)
+        message = self.session_start("new-session", repo)
+        self.assertIn("(+2 more)", message)
+
+    def test_elsewhere_it_only_says_how_many_are_in_progress(self):
+        self.add_item("checkout", "doing", self.repo())
+        message = self.session_start("new-session", self.repo("api"))
+        self.assertIn("items in progress, none from this repository", message)
+        self.assertIn("rumo now", message)
+        self.assertNotIn("Checkout", message)
+
+    def test_outside_a_repository_only_sessions_started_in_that_folder_count(self):
+        home = self.root / "home"
+        (home / "notes").mkdir(parents=True)
+        self.add_item("notes", "doing", home / "notes")
+        self.add_item("home", "doing", home)
+        message = self.session_start("new-session", home)
+        self.assertIn("Home (doing", message)
+        self.assertNotIn("Notes (doing", message)
+
+    def test_session_start_is_silent_when_linked_or_with_nothing_in_progress(self):
+        self.assertEqual(self.session_start("open-session", self.root), "")  # the prompt reminder covers it
+        self.item.unlink()
+        self.assertEqual(self.session_start("new-session", self.root), "")
+
+    def test_rumo_now_lists_what_is_in_progress_with_the_next_step(self):
+        self.add_item("checkout", "doing", self.root, "- [ ] [manual] Testar no celular\n")
+        result = subprocess.run([sys.executable, "-m", "rumo.cli", "now"],
+                                capture_output=True, text=True, encoding="utf-8", env=self.env)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        lines = result.stdout.splitlines()
+        self.assertEqual(lines[0], f"Checkout | doing | next: [manual] Testar no celular | {self.folder / 'checkout.md'}")
+        self.assertTrue(lines[1].startswith("Migração do logout | waiting | next: [manual] Pedir review da PR | "))
+        self.item.unlink()
+        (self.folder / "checkout.md").unlink()
+        result = subprocess.run([sys.executable, "-m", "rumo.cli", "now"],
+                                capture_output=True, text=True, encoding="utf-8", env=self.env)
+        self.assertEqual(result.stdout, "Nothing in progress.\n")
+
     def test_stays_silent_on_a_missing_or_broken_transcript(self):
         for transcript in ("/nowhere.jsonl", str(self.root)):
             payload = {"session_id": "open-session", "hook_event_name": "Stop", "transcript_path": transcript}

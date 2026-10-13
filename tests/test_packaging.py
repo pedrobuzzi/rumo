@@ -24,7 +24,7 @@ class PackagingTest(unittest.TestCase):
         skill = (ROOT / "skills" / "rumo" / "SKILL.md").read_text(encoding="utf-8")
         self.assertRegex(skill, r"(?m)^name: rumo$")
         hooks = json.loads((ROOT / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
-        for event in ("UserPromptSubmit", "Stop"):
+        for event in ("SessionStart", "UserPromptSubmit", "Stop"):
             command = hooks[event][0]["hooks"][0]["command"]
             self.assertIn("rumo hook", command, event)
             # An old `rumo` without this event, or none at all, must never block the session.

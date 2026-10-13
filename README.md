@@ -72,7 +72,8 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | `t` | toggle tags |
 | `n` | capture a new idea |
 | `e` | open the item in `$EDITOR` |
-| space | check or uncheck the selected step |
+| `a` | add a step to the selected item, after its open steps (below the highlighted one when the steps have focus); in the dialog, Tab switches `[agent]` and `[manual]` |
+| Enter, shift+↑ ↓, `d`, space | with the steps focused: edit, move, delete (asks first) or check the highlighted step; Esc goes back |
 | `c` | copy the command that resumes the selected agent session |
 | `/` | filter by title, tag, group or text (Esc clears) |
 | `q` | quit |
@@ -107,9 +108,16 @@ follow several topics: when you start something no linked item covers, the agent
 track it as a new item, add it as a step, or leave it out. Left off is one line and Context at most
 three. `/clear` starts a new, unlinked session; `claude --resume <id>` picks the old one up again.
 
-In a session without an item, once it edits files, the agent asks whether to track it. The first time
-it also asks whether to keep asking in future sessions (`ask_to_track` in the config). If you say no,
-it reminds you that the option exists every 15 days or 15 sessions.
+You can add, edit, move, check and delete steps in the Timeline too. On your next message, a linked
+session is told which steps changed since its last answer, so it neither redoes nor re-adds them, and
+it starts none of them unless you ask. When the agent finishes a step and more remain, it ends with
+the next one: an offer to start it, or a note that it is yours.
+
+In a session without an item, the agent learns at the start what is in progress in that repository
+(up to three items, with their next step), so it can answer "what is left?"; `rumo now` lists
+everything in progress. Once that session edits files, the agent asks whether to track it. The first
+time it also asks whether to keep asking in future sessions (`ask_to_track` in the config). If you
+say no, it reminds you that the option exists every 15 days or 15 sessions.
 
 ## Item format
 

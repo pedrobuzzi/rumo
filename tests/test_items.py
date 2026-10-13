@@ -111,6 +111,67 @@ class ItemsTest(unittest.TestCase):
         self.assertEqual((item.group, item.tags), ("", []))
         self.assertNotIn("group:", self.path.read_text())
 
+    def steps(self) -> list[str]:
+        return [f"{'x' if s.done else ' '} {s.kind} {s.text}" for s in items.load(self.path).steps]
+
+    def test_adds_a_step_below_the_chosen_one_or_after_the_open_steps(self):
+        item = items.load(self.path)
+        self.assertEqual(items.add_step(item, "Atualizar o changelog", "manual", after=item.steps[0]), 1)
+        self.assertEqual(items.add_step(items.load(self.path), "  Abrir a PR\n de novo ", "agent"), 4)
+        self.assertEqual(self.steps(), [
+            "x agent Ajustar o handler de logout",
+            "  manual Atualizar o changelog",
+            "  manual Pedir review da PR",
+            "  agent Teste e2e do logout",
+            "  agent Abrir a PR de novo",
+        ])
+        self.assertIn("- [ ] [manual] Atualizar o changelog\n- [ ] [manual] Pedir review", self.path.read_text())
+        self.assertIn("\n\n## Sessions", self.path.read_text())
+
+    def test_adds_the_steps_section_when_the_item_has_none(self):
+        idea = write(self.folder, "2026-10-11-idea.md", "---\ntitle: Cache\nstatus: idea\n---\n\n## Context\nLento.\n")
+        items.add_step(items.load(idea), "Medir o tempo da home", "agent")
+        self.assertTrue(idea.read_text().endswith("## Context\nLento.\n\n## Steps\n- [ ] [agent] Medir o tempo da home\n"))
+
+        linked = write(self.folder, "2026-10-11-linked.md", "---\ntitle: X\n---\n\n## Sessions\n- a | b | c | d\n")
+        items.add_step(items.load(linked), "Primeiro passo", "manual")
+        self.assertIn("---\n\n## Steps\n- [ ] [manual] Primeiro passo\n\n## Sessions\n", linked.read_text())
+
+    def test_edits_moves_and_deletes_steps(self):
+        item = items.load(self.path)
+        items.edit_step(item, item.steps[0], "Ajustar o handler e o redirect", "manual")
+        item = items.load(self.path)
+        items.move_step(item, item.steps[2], -1)
+        item = items.load(self.path)
+        items.delete_step(item, item.steps[2])
+        self.assertEqual(self.steps(), [
+            "x manual Ajustar o handler e o redirect",
+            "  agent Teste e2e do logout",
+        ])
+        self.assertIn("updated: ", self.path.read_text())
+        self.assertNotIn("updated: 2026-10-11 16:30", self.path.read_text())
+
+    def test_moving_past_either_end_changes_nothing(self):
+        item = items.load(self.path)
+        before = self.path.read_text()
+        self.assertFalse(items.move_step(item, item.steps[0], -1))
+        self.assertFalse(items.move_step(item, item.steps[2], 1))
+        self.assertEqual(self.path.read_text(), before)
+
+    def test_a_step_needs_text_and_a_known_kind(self):
+        item = items.load(self.path)
+        with self.assertRaises(ValueError):
+            items.add_step(item, "   ", "agent")
+        with self.assertRaises(ValueError):
+            items.add_step(item, "Algo", "someone")
+
+    def test_step_edits_refuse_when_the_line_changed(self):
+        item = items.load(self.path)
+        stale = item.steps[1]
+        items.edit_step(item, stale, "Pedir review ao time", "manual")
+        with self.assertRaises(items.WriteConflict):
+            items.delete_step(items.load(self.path), stale)
+
     def test_edits_a_file_written_without_frontmatter(self):
         path = write(self.folder, "2026-10-11-bare.md", "## Steps\n- [ ] [manual] Ligar para o suporte\n")
         item = items.load(path)

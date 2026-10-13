@@ -40,16 +40,17 @@ MAX_LABEL = 16  # the project label fits the longest group name up to this many 
 NEW_GROUP = "+new"
 NO_GROUP = "-none"
 
-KEYS = Text.assemble(
-    *(
-        part
-        for key, label in [
-            ("v", "view"), ("h", "now/later/past"), ("s", "status"), ("g", "group"), ("t", "tags"),
-            ("n", "new idea"), ("e", "edit"), ("space", "step"), ("c", "copy resume"), ("/", "filter"), ("q", "quit"),
-        ]
-        for part in ((key, "bold"), (f" {label}  ", "dim"))
-    )
-)
+def key_line(keys: list[tuple[str, str]]) -> Text:
+    return Text.assemble(*(part for key, label in keys for part in ((key, "bold"), (f" {label}  ", "dim"))))
+
+
+KEYS = key_line([
+    ("v", "view"), ("h", "now/later/past"), ("s", "status"), ("g", "group"), ("t", "tags"), ("n", "new idea"),
+    ("a", "add step"), ("tab", "steps"), ("e", "edit"), ("c", "copy resume"), ("/", "filter"), ("q", "quit"),
+])
+STEP_KEYS = key_line([  # while the Steps list has focus
+    ("a", "add"), ("enter", "edit"), ("shift+↑↓", "move"), ("d", "delete"), ("space", "check"), ("esc", "back"),
+])
 
 
 def status_text(status: str, label: str | None = None) -> Text:
@@ -288,8 +289,59 @@ class TagScreen(ModalScreen[list[str] | None]):
         self.dismiss([t for t in self.tags if t in chosen])
 
 
+class StepScreen(ModalScreen[tuple[str, str] | None]):
+    """A step's text and who does it: Tab switches between [agent] and [manual], Enter saves."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "cancel"),
+        Binding("tab", "switch_kind", "agent/manual", priority=True),
+    ]
+
+    def __init__(self, title: str, text: str = "", kind: str = "agent") -> None:
+        super().__init__()
+        self.title_text = title
+        self.text = text
+        self.kind = kind if kind in items.KINDS else "agent"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Label(self.title_text, classes="dialog-title")
+            # Editing usually fixes a word: keep the text and put the cursor at its end.
+            yield Input(value=self.text, placeholder="one short line, starting with a verb", select_on_focus=False)
+            yield Static(self.kind_line(), id="kind", classes="dialog-hint")
+
+    def kind_line(self) -> Text:
+        text = Text("who does it  ", "dim")
+        for kind in items.KINDS:
+            text.append(f"[{kind}]" if kind == self.kind else kind, "bold" if kind == self.kind else "dim")
+            text.append("  ")
+        return text.append_text(Text.assemble(("tab", "bold"), (" switches\n", "dim"), ("enter", "bold"),
+                                              (" saves  ", "dim"), ("esc", "bold"), (" cancels", "dim")))
+
+    def action_switch_kind(self) -> None:
+        self.kind = items.KINDS[(items.KINDS.index(self.kind) + 1) % len(items.KINDS)]
+        self.query_one("#kind", Static).update(self.kind_line())
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        text = " ".join(event.value.split())
+        self.dismiss((text, self.kind) if text else None)
+
+
 class StepList(ListView):
-    BINDINGS = [Binding("space", "app.toggle_step", "toggle step")]
+    BINDINGS = [
+        Binding("space", "app.toggle_step", "toggle step"),
+        Binding("enter", "app.edit_step", "edit step"),
+        Binding("d", "app.delete_step", "delete step"),
+        Binding("shift+up", "app.move_step(-1)", "move up"),
+        Binding("shift+down", "app.move_step(1)", "move down"),
+    ]
+
+    def on_focus(self) -> None:
+        self.app.query_one("#keys", Static).update(STEP_KEYS)
+
+    def on_blur(self) -> None:
+        self.app.query_one("#keys", Static).update(KEYS)
 
 
 # ---------- app ----------
@@ -328,6 +380,7 @@ class RumoApp(App):
         Binding("g", "group", "group"),
         Binding("t", "tags", "tags"),
         Binding("n", "new_idea", "new idea"),
+        Binding("a", "add_step", "add step"),
         Binding("e", "edit", "edit"),
         Binding("c", "copy_resume", "copy resume"),
         Binding("slash", "filter", "filter"),
@@ -659,7 +712,7 @@ class RumoApp(App):
             for s in reversed(item.sessions)
         )
         if item.steps:
-            steps.index = min(step_index or 0, len(item.steps) - 1)
+            self.select_step(step_index or 0)
         if item.sessions:
             sessions.index = min(session_index or 0, len(item.sessions) - 1)
 
@@ -704,6 +757,82 @@ class RumoApp(App):
             return
         step = item.steps[index]
         self.write(lambda: items.toggle_step(item, step))
+
+    def focused_step(self) -> tuple[Item, int] | None:
+        """The current item and its highlighted step, when the Steps list has focus."""
+        item = self.current_item()
+        steps = self.query_one("#steps", ListView)
+        if item is None or not steps.has_focus or steps.index is None or steps.index >= len(item.steps):
+            return None
+        return item, steps.index
+
+    def select_step(self, index: int) -> None:
+        item = self.current_item()
+        if not item or not item.steps:
+            return
+        steps = self.query_one("#steps", ListView)
+        steps.index = max(0, min(index, len(item.steps) - 1))
+
+        # Right after a rebuild the highlight lands on a row about to be removed: draw it again after.
+        def highlight() -> None:
+            for n, row in enumerate(steps.query(ListItem)):
+                row.highlighted = n == steps.index
+
+        steps.call_after_refresh(highlight)
+
+    def action_add_step(self) -> None:
+        """Below the highlighted step while the Steps list has focus, else after the open steps."""
+        item = self.current_item()
+        if item is None:
+            return
+        if item.status == "done":
+            self.notify("This item is done. Reopen it first (s), then add the step.", severity="warning")
+            return
+        focused = self.focused_step()
+        after = item.steps[focused[1]] if focused else None
+
+        def added(answer: tuple[str, str] | None) -> None:
+            if answer:
+                landed: list[int] = []
+                self.write(lambda: landed.append(items.add_step(item, *answer, after=after)))
+                if landed:
+                    self.select_step(landed[0])
+
+        self.push_screen(StepScreen(f"New step in “{item.title}”"), added)
+
+    def action_edit_step(self) -> None:
+        if (focused := self.focused_step()) is None:
+            return
+        item, index = focused
+        step = item.steps[index]
+
+        def edited(answer: tuple[str, str] | None) -> None:
+            if answer and answer != (step.text, step.kind):
+                self.write(lambda: items.edit_step(item, step, *answer))
+
+        self.push_screen(StepScreen("Edit step", step.text, step.kind), edited)
+
+    def action_move_step(self, delta: int) -> None:
+        if (focused := self.focused_step()) is None:
+            return
+        item, index = focused
+        moved: list[bool] = []
+        self.write(lambda: moved.append(items.move_step(item, item.steps[index], delta)))
+        if moved and moved[0]:
+            self.select_step(index + delta)
+
+    def action_delete_step(self) -> None:
+        if (focused := self.focused_step()) is None:
+            return
+        item, index = focused
+        step = item.steps[index]
+
+        def confirmed(answer: str | None) -> None:
+            if answer == "delete":
+                self.write(lambda: items.delete_step(item, step))
+
+        choices = [("delete", Text("delete step", "bold")), ("cancel", Text("cancel"))]
+        self.push_screen(ChoiceScreen(f"Delete the step “{step.text}”?", choices), confirmed)
 
     def action_status(self) -> None:
         item = self.current_item()

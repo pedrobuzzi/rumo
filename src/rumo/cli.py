@@ -1,7 +1,7 @@
 """The `rumo` command: opens the Timeline.
 
 Other subcommands exist for the agent and the hook, and are kept out of
-the help on purpose: `hook`, `index`, `path`, `group-add`, `ask-to-track`, `--version`.
+the help on purpose: `hook`, `index`, `now`, `path`, `group-add`, `ask-to-track`, `--version`.
 """
 
 from __future__ import annotations
@@ -35,6 +35,8 @@ def main(argv: list[str] | None = None) -> None:
         print(config.load().folder)
     elif command == "index":
         _index()
+    elif command == "now":
+        _now()
     elif command == "group-add":
         _group_add(args[1:])
     elif command == "ask-to-track":
@@ -63,6 +65,18 @@ def _index() -> None:
     print(f"# colors: {', '.join(config.PALETTE)}")
     if listing := items.index(items.list_items(cfg.folder)):
         print(listing)
+
+
+def _now() -> None:
+    """What is in progress (doing, then waiting), one line each: title, status, next step and file."""
+    from rumo import config, items
+
+    in_progress = items.timeline(items.list_items(config.load().folder)).now
+    for item in in_progress:
+        step = item.next_step
+        print(f"{item.title} | {item.status} | next: {step.label if step else 'no open steps'} | {item.path}")
+    if not in_progress:
+        print("Nothing in progress.")
 
 
 def _group_add(rest: list[str]) -> None:

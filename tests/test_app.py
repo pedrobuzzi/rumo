@@ -6,7 +6,8 @@ from datetime import date
 from pathlib import Path
 
 from rich.console import Console
-from textual.widgets import Input, OptionList, Static
+from textual.screen import ModalScreen
+from textual.widgets import Input, ListItem, OptionList, Static
 
 from rumo import config, items
 from rumo.app import GroupScreen, RumoApp
@@ -426,6 +427,73 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("down", "space")
             await pilot.pause()
             self.assertEqual([s.done for s in items.load(self.logout).steps], [True, True])
+            # the list is rebuilt after each change, and the step stays highlighted
+            self.assertEqual([row.highlighted for row in app.query_one("#steps").query(ListItem)], [False, True])
+
+    def steps(self) -> list[str]:
+        return [f"{'x' if s.done else ' '} {s.kind} {s.text}" for s in items.load(self.logout).steps]
+
+    async def test_a_adds_a_step_after_the_open_ones_and_tab_switches_agent_and_manual(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("a")
+            hint = str(app.screen.query_one("#kind", Static).render())
+            self.assertIn("tab", hint)
+            self.assertIn("[agent]", hint)
+            await pilot.press(*"Atualizar docs", "tab", "enter")
+            await pilot.pause()
+            self.assertEqual(self.steps()[-1], "  manual Atualizar docs")
+            self.assertEqual(app.query_one("#steps").index, 2)
+
+    async def test_in_the_steps_a_adds_below_and_enter_edits_the_highlighted_step(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            app.query_one("#steps").focus()
+            await pilot.press("a", *"Revisar o fluxo", "enter")
+            await pilot.pause()
+            self.assertEqual(self.steps(), ["x agent Ajustar handler", "  agent Revisar o fluxo", "  manual Pedir review"])
+            await pilot.press("down", "enter", *" do time", "tab", "enter")
+            await pilot.pause()
+            self.assertEqual(self.steps()[2], "  agent Pedir review do time")
+
+    async def test_shift_arrows_move_a_step_and_d_deletes_it_after_confirming(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            app.query_one("#steps").focus()
+            await pilot.press("down", "shift+up")
+            await pilot.pause()
+            self.assertEqual(self.steps(), ["  manual Pedir review", "x agent Ajustar handler"])
+            self.assertEqual(app.query_one("#steps").index, 0)
+            await pilot.press("d", "escape")
+            await pilot.pause()
+            self.assertEqual(len(self.steps()), 2)
+            await pilot.press("d", "1")
+            await pilot.pause()
+            self.assertEqual(self.steps(), ["x agent Ajustar handler"])
+
+    async def test_a_done_item_takes_no_new_steps(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("h", "h")
+            self.assertEqual(app.current, "shipped")
+            before = (self.folder / "shipped.md").read_text()
+            await pilot.press("a")
+            await pilot.pause()
+            self.assertNotIsInstance(app.screen, ModalScreen)
+            self.assertEqual((self.folder / "shipped.md").read_text(), before)
+
+    async def test_the_footer_shows_the_step_keys_while_the_steps_have_focus(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            keys = lambda: str(app.query_one("#keys", Static).render())
+            self.assertIn("tab steps", keys())
+            app.query_one("#steps").focus()
+            await pilot.pause()
+            self.assertIn("shift+↑↓ move", keys())
+            self.assertIn("d delete", keys())
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertIn("tab steps", keys())
 
     async def test_picks_up_changes_made_on_disk(self):
         app = self.app()

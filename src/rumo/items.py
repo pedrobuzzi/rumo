@@ -19,6 +19,7 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 STATUSES = ("idea", "doing", "waiting", "paused", "done")
+KINDS = ("agent", "manual")  # who does a step: the agent, or the user (or someone else) outside it
 
 TIME_FORMAT = "%Y-%m-%d %H:%M"
 PAST_WINDOW_DAYS = 14
@@ -37,6 +38,10 @@ class Step:
     kind: str  # "agent", "manual" or "" when the line has no marker
     text: str
     line: int  # index of the line in the file
+
+    @property
+    def label(self) -> str:
+        return (f"[{self.kind}] " if self.kind else "") + self.text
 
 
 @dataclass
@@ -220,14 +225,87 @@ def set_tags(item: Item, tags: list[str], now: datetime | None = None) -> None:
 
 def toggle_step(item: Item, step: Step, now: datetime | None = None) -> None:
     def edit(lines: list[str], offset: int) -> None:
-        i = step.line + offset
-        m = _STEP_RE.match(lines[i]) if i < len(lines) else None
-        if not m or m.group(3) != step.text:
-            raise WriteConflict(item.path.name)
-        mark = " " if m.group(1) != " " else "x"
-        lines[i] = f"- [{mark}] " + lines[i][6:]
+        i = _step_at(item, lines, step, offset)
+        lines[i] = f"- [{' ' if step.done else 'x'}] " + lines[i][6:]
 
     _save(item, edit, _stamp(now))
+
+
+def add_step(item: Item, text: str, kind: str, after: Step | None = None, now: datetime | None = None) -> int:
+    """Add an open step below `after`, or else after the last open step (a new Steps section if none).
+
+    Returns where the new step lands among the item's steps.
+    """
+    line = _step_line(False, kind, text)
+    anchor = after or next((s for s in reversed(item.steps) if not s.done), item.steps[-1] if item.steps else None)
+
+    def edit(lines: list[str], offset: int) -> None:
+        if anchor:
+            lines.insert(_step_at(item, lines, anchor, offset) + 1, line)
+            return
+        headings = {
+            m.group(1).strip().lower(): i
+            for i in range(_frontmatter_end(lines)[0] + 1, len(lines))
+            if (m := _SECTION_RE.match(lines[i]))
+        }
+        if "steps" in headings:
+            lines.insert(headings["steps"] + 1, line)
+        elif "sessions" in headings:
+            lines[headings["sessions"]:headings["sessions"]] = ["## Steps", line, ""]
+        else:
+            lines.extend(([""] if lines and lines[-1].strip() else []) + ["## Steps", line])
+
+    _save(item, edit, _stamp(now))
+    return item.steps.index(anchor) + 1 if anchor else 0
+
+
+def edit_step(item: Item, step: Step, text: str, kind: str, now: datetime | None = None) -> None:
+    line = _step_line(step.done, kind, text)
+
+    def edit(lines: list[str], offset: int) -> None:
+        lines[_step_at(item, lines, step, offset)] = line
+
+    _save(item, edit, _stamp(now))
+
+
+def delete_step(item: Item, step: Step, now: datetime | None = None) -> None:
+    def edit(lines: list[str], offset: int) -> None:
+        del lines[_step_at(item, lines, step, offset)]
+
+    _save(item, edit, _stamp(now))
+
+
+def move_step(item: Item, step: Step, delta: int, now: datetime | None = None) -> bool:
+    """Swap the step with the one `delta` places away (done or open); False when there is none."""
+    target = item.steps.index(step) + delta
+    if not 0 <= target < len(item.steps):
+        return False
+    other = item.steps[target]
+
+    def edit(lines: list[str], offset: int) -> None:
+        i, j = _step_at(item, lines, step, offset), _step_at(item, lines, other, offset)
+        lines[i], lines[j] = lines[j], lines[i]
+
+    _save(item, edit, _stamp(now))
+    return True
+
+
+def _step_line(done: bool, kind: str, text: str) -> str:
+    text = " ".join(text.split())  # one line, whatever was pasted
+    if not text:
+        raise ValueError("a step needs text")
+    if kind not in KINDS:
+        raise ValueError(f"unknown step kind: {kind}")
+    return f"- [{'x' if done else ' '}] [{kind}] {text}"
+
+
+def _step_at(item: Item, lines: list[str], step: Step, offset: int) -> int:
+    """The step's line index now, or WriteConflict when that line no longer holds the step."""
+    i = step.line + offset
+    m = _STEP_RE.match(lines[i]) if i < len(lines) else None
+    if not m or m.group(3) != step.text:
+        raise WriteConflict(item.path.name)
+    return i
 
 
 def _stamp(now: datetime | None) -> str:

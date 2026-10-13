@@ -84,8 +84,8 @@ conversation so far.
    `updated`.
 
 ### now
-List the `doing` and `waiting` items: title, status, and the first unchecked step of each. Offer to
-`link` one.
+Run `rumo now` (one line per `doing` or `waiting` item: title, status, next step, file) and list
+them: title, status and next step. Offer to `link` one.
 
 ### find <text>
 Search titles and content: `grep -il "<text>" "<folder>"/*.md`, then read only the matches.
@@ -139,6 +139,12 @@ else stays short.
   of a turn whose work reached no linked item.
 - **Never delete an open step** unless the user explicitly asks to drop it. Open steps are what keeps
   half-done work from being forgotten; moving on to something else never closes or deletes them.
+- **The user edits steps too**, in the rumo TUI or an editor. The hook points out what changed since
+  your last response: take it into account, never add back a step they removed, and do not start a
+  step they added unless they ask.
+- **Name the next step when you finish one.** When you check off the step you were working on and the
+  item still has open steps, end with one line in the user's language: for an `[agent]` step offer
+  to start it, for a `[manual]` step say it is theirs.
 - **Left off is one line**: where it stands or what blocks it. Not a copy of the next step.
 - **Context is at most 3 short lines**: what this is and why it matters. No history, no logs, no
   list of what was done (the checked steps are that), no commands. A link to a longer document is
@@ -158,6 +164,10 @@ A session can be linked to several items, and keeps all of them up to date.
   Now until the user parks or finishes them. Never park or close one unless the user asks.
 
 ## Sessions without an item
+
+At the start of such a session, the hook lists what is in progress in this repository (or says how
+many items are in progress elsewhere). When the user asks what is pending or what to do next, answer
+from that, or run `rumo now`. Do not start any of it unless they ask.
 
 In Claude Code, when a session without a linked item edits files, the hook asks you to offer rumo
 once. The first time on a machine it also asks whether to keep offering in future sessions: record
