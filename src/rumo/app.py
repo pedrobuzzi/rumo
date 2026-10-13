@@ -151,6 +151,11 @@ class ChoiceScreen(ModalScreen[str | None]):
                 event.stop()
                 self.pick(self.choices[n - 1][0])
 
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """The lists grow with the item and the detail pane scrolls: keep the highlighted row in view."""
+        if event.item is not None and event.list_view.has_focus:
+            event.item.scroll_visible(animate=False)
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         self.pick(event.option.id)
 
@@ -360,7 +365,7 @@ class RumoApp(App):
     #detail { border: round $secondary-darken-1; padding: 0 1; }
     #header { margin-bottom: 1; }
     .section { text-style: bold; color: $accent; margin-top: 1; }
-    #steps, #sessions { height: auto; max-height: 12; }
+    #steps, #sessions { height: auto; }
     Markdown { margin: 0; padding: 0; }
     #legend, #keys { height: auto; padding: 0 1; }
     ModalScreen { align: center middle; }
@@ -663,6 +668,11 @@ class RumoApp(App):
         if option_id.startswith("item:") and option_id.removeprefix("item:") != self.current:
             self.current = option_id.removeprefix("item:")
             self.show_detail()
+
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        """The lists grow with the item and the detail pane scrolls: keep the highlighted row in view."""
+        if event.item is not None and event.list_view.has_focus:
+            event.item.scroll_visible(animate=False)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if event.option_list.id == "timeline" and event.option.id == "older":

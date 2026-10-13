@@ -495,6 +495,29 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIn("tab steps", keys())
 
+    async def test_the_steps_grow_with_the_pane_instead_of_scrolling_on_their_own(self):
+        body = "## Steps\n" + "".join(f"- [ ] [agent] Passo {n}\n" for n in range(1, 21))
+        item(self.folder, "longo", "doing", "2026-10-11 12:00", extra="group: migracao-auth\n", body=body)
+        app = self.app()
+        async with app.run_test(size=(120, 50)) as pilot:
+            await pilot.pause()
+            self.assertEqual(app.current, "longo")
+            steps = app.query_one("#steps")
+            self.assertEqual((steps.size.height, steps.max_scroll_y), (20, 0))
+
+    async def test_the_pane_scrolls_to_keep_the_highlighted_step_in_view(self):
+        body = "## Steps\n" + "".join(f"- [ ] [agent] Passo {n}\n" for n in range(1, 21))
+        item(self.folder, "longo", "doing", "2026-10-11 12:00", extra="group: migracao-auth\n", body=body)
+        app = self.app()
+        async with app.run_test(size=(120, 24)) as pilot:
+            app.query_one("#steps").focus()
+            await pilot.press(*["down"] * 19)
+            await pilot.pause()
+            detail = app.query_one("#detail")
+            last = app.query_one("#steps").query(ListItem).last()
+            self.assertGreater(detail.scroll_y, 0)
+            self.assertTrue(detail.content_region.contains_region(last.region), (detail.content_region, last.region))
+
     async def test_picks_up_changes_made_on_disk(self):
         app = self.app()
         async with app.run_test() as pilot:
