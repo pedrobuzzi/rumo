@@ -1,6 +1,6 @@
 [project]
 name = "rumo-cli"
-version = "0.3.0"
+version = "0.4.0"
 description = "Your dev work, past, now and later: Markdown files, a terminal Timeline, and AI agents that keep it current"
 readme = "README.md"
 requires-python = ">=3.11"
