@@ -141,7 +141,7 @@ class ItemsTest(unittest.TestCase):
         item = items.load(self.path)
         items.edit_step(item, item.steps[0], "Ajustar o handler e o redirect", "manual")
         item = items.load(self.path)
-        items.move_step(item, item.steps[2], -1)
+        items.swap_steps(item, item.steps[2], item.steps[1])
         item = items.load(self.path)
         items.delete_step(item, item.steps[2])
         self.assertEqual(self.steps(), [
@@ -151,12 +151,11 @@ class ItemsTest(unittest.TestCase):
         self.assertIn("updated: ", self.path.read_text())
         self.assertNotIn("updated: 2026-10-11 16:30", self.path.read_text())
 
-    def test_moving_past_either_end_changes_nothing(self):
+    def test_swaps_steps_that_are_not_next_to_each_other(self):
         item = items.load(self.path)
-        before = self.path.read_text()
-        self.assertFalse(items.move_step(item, item.steps[0], -1))
-        self.assertFalse(items.move_step(item, item.steps[2], 1))
-        self.assertEqual(self.path.read_text(), before)
+        items.swap_steps(item, item.steps[0], item.steps[2])
+        self.assertEqual([s.text for s in items.load(self.path).steps],
+                         ["Teste e2e do logout", "Pedir review da PR", "Ajustar o handler de logout"])
 
     def test_a_step_needs_text_and_a_known_kind(self):
         item = items.load(self.path)

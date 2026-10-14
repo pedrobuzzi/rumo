@@ -275,19 +275,13 @@ def delete_step(item: Item, step: Step, now: datetime | None = None) -> None:
     _save(item, edit, _stamp(now))
 
 
-def move_step(item: Item, step: Step, delta: int, now: datetime | None = None) -> bool:
-    """Swap the step with the one `delta` places away (done or open); False when there is none."""
-    target = item.steps.index(step) + delta
-    if not 0 <= target < len(item.steps):
-        return False
-    other = item.steps[target]
-
+def swap_steps(item: Item, step: Step, other: Step, now: datetime | None = None) -> None:
+    """Swap two steps' lines: moving a step up or down swaps it with the step shown next to it."""
     def edit(lines: list[str], offset: int) -> None:
         i, j = _step_at(item, lines, step, offset), _step_at(item, lines, other, offset)
         lines[i], lines[j] = lines[j], lines[i]
 
     _save(item, edit, _stamp(now))
-    return True
 
 
 def _step_line(done: bool, kind: str, text: str) -> str:

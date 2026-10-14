@@ -7,7 +7,7 @@ from pathlib import Path
 
 from rich.console import Console
 from textual.screen import ModalScreen
-from textual.widgets import Input, ListItem, OptionList, Static
+from textual.widgets import Input, Label, ListItem, OptionList, Static
 
 from rumo import config, items
 from rumo.app import GroupScreen, RumoApp
@@ -482,6 +482,17 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertNotIsInstance(app.screen, ModalScreen)
             self.assertEqual((self.folder / "shipped.md").read_text(), before)
 
+    async def test_a_narrow_footer_wraps_between_keys_never_inside_one(self):
+        app = self.app()
+        async with app.run_test(size=(60, 30)) as pilot:
+            await pilot.pause()
+            lines = str(app.query_one("#keys", Static).render()).splitlines()
+            self.assertGreater(len(lines), 1)
+            for line in lines:
+                self.assertLessEqual(len(line.rstrip()), 58, line)
+                self.assertRegex(line, r"^(\S+ [^ ]+( [^ ]+)?  )*\S+ \S+( \S+)?\s*$", line)
+            self.assertIn("q quit", " ".join(lines))
+
     async def test_the_footer_shows_the_step_keys_while_the_steps_have_focus(self):
         app = self.app()
         async with app.run_test() as pilot:
@@ -494,6 +505,56 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("escape")
             await pilot.pause()
             self.assertIn("tab steps", keys())
+
+    def shown_steps(self, app: RumoApp) -> list[str]:
+        return [str(row.query_one(Label).render()) for row in app.query_one("#steps").query(ListItem)]
+
+    async def test_x_hides_the_done_steps_of_every_item_and_shows_them_again(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            keys = lambda: str(app.query_one("#keys", Static).render())
+            self.assertIn("x hide done", keys())
+            await pilot.press("x")
+            await pilot.pause()
+            self.assertEqual(self.shown_steps(app), ["[ ] [manual] Pedir review"])
+            self.assertIn("1 done hidden", str(app.query_one("#steps-title", Label).render()))
+            self.assertIn("x show done", keys())
+            await pilot.press("x")
+            await pilot.pause()
+            self.assertEqual(len(self.shown_steps(app)), 2)
+            self.assertNotIn("hidden", str(app.query_one("#steps-title", Label).render()))
+            self.assertIn("x hide done", keys())
+
+    async def test_hiding_done_steps_is_remembered_between_runs(self):
+        async with self.app().run_test() as pilot:
+            await pilot.press("x")
+            await pilot.pause()
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(self.shown_steps(app), ["[ ] [manual] Pedir review"])
+
+    async def test_with_done_steps_hidden_the_step_keys_act_on_the_visible_steps(self):
+        self.logout.write_text(
+            "---\ntitle: logout\nstatus: doing\nupdated: 2026-10-11 10:00\ngroup: migracao-auth\n---\n## Steps\n"
+            "- [ ] [agent] Um\n- [x] [agent] Feito\n- [ ] [agent] Dois\n- [ ] [agent] Tres\n", encoding="utf-8",
+        )
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("x")
+            app.query_one("#steps").focus()
+            await pilot.press("down", "shift+up")  # Dois swaps with Um, skipping the hidden one
+            await pilot.pause()
+            self.assertEqual(self.steps(), ["  agent Dois", "x agent Feito", "  agent Um", "  agent Tres"])
+            self.assertEqual(app.query_one("#steps").index, 0)
+            await pilot.press("down", "space")  # checks Um, which then hides
+            await pilot.pause()
+            self.assertEqual(self.steps(), ["  agent Dois", "x agent Feito", "x agent Um", "  agent Tres"])
+            self.assertEqual(self.shown_steps(app), ["[ ] [agent] Dois", "[ ] [agent] Tres"])
+            await pilot.press("a", *"Quatro", "enter")  # below the highlighted Tres
+            await pilot.pause()
+            self.assertEqual(self.steps()[-1], "  agent Quatro")
+            self.assertEqual(app.query_one("#steps").index, 2)
 
     async def test_the_steps_grow_with_the_pane_instead_of_scrolling_on_their_own(self):
         body = "## Steps\n" + "".join(f"- [ ] [agent] Passo {n}\n" for n in range(1, 21))

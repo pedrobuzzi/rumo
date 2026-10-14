@@ -34,10 +34,12 @@ agent finishes a step and more remain, it names the next one.
 14. As a user, in a repository with no item in progress, I want the agent to know how many items are in progress elsewhere and that `rumo now` lists them.
 15. As a user, I want `rumo now` in the terminal: one line per item in progress with its status, next step and file.
 16. As a user, when the agent checks off the step it was working on and more remain, I want it to end with the next one: an offer to start an `[agent]` step, or a note that a `[manual]` one is mine.
+17. As a user, I want `x` to hide the done steps of every item, and show them again, so that a long item shows only what is left; the title says how many are hidden, and rumo remembers the choice.
 
 ## Implementation Decisions
 
 - Items: add, edit, delete and move steps through the same guarded write as every other change (refused when the file changed on disk, or when the step's line no longer holds it). A new step is always one line with a kind; adding to an item without a Steps section creates it before Sessions. Moving swaps with the neighbor, done or open.
+- TUI: `x` hides or shows done steps in the detail of every item; the choice is kept in state.json next to the view. While hidden, the step keys act on the steps on screen, and moving swaps with the step shown next to it (items swap any two steps). The footer says what `x` does now and wraps between keys to the terminal's width.
 - TUI: a step dialog with the text and a kind line (`[agent]  manual  tab switches · enter saves · esc cancels`). Delete reuses the confirmation picker of group deletion. The footer has two key lines and swaps them as the Steps list gains or loses focus.
 - Hook, Stop: for a linked session, note the steps of each linked item as the agent has seen them (state.json, last 20 sessions). An item the agent did not edit in that turn keeps the steps noted before, so changes made meanwhile are still reported. This runs on every stop, including one after a nudge.
 - Hook, UserPromptSubmit: compare each linked item's steps with that note and, once, list what was added, removed, checked or unchecked. The note is refreshed here only when the Stop hook already keeps one, so an older plugin without the Stop hook never reports the agent's own edits.

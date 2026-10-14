@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from pathlib import Path
 
+from rich.cells import cell_len
 from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -40,17 +41,28 @@ MAX_LABEL = 16  # the project label fits the longest group name up to this many 
 NEW_GROUP = "+new"
 NO_GROUP = "-none"
 
-def key_line(keys: list[tuple[str, str]]) -> Text:
-    return Text.assemble(*(part for key, label in keys for part in ((key, "bold"), (f" {label}  ", "dim"))))
+def key_line(keys: list[tuple[str, str]], width: int = 0) -> Text:
+    """`v view  h now/later/past ...`, broken into lines of `width` between keys, never inside one."""
+    text, used = Text(), 0
+    for key, label in keys:
+        size = cell_len(f"{key} {label}")
+        if used and width and used + size > width:
+            text.append("\n")
+            used = 0
+        text.append(key, "bold").append(f" {label}  ", "dim")
+        used += size + 2
+    return text
 
 
-KEYS = key_line([
+KEYS = [
     ("v", "view"), ("h", "now/later/past"), ("s", "status"), ("g", "group"), ("t", "tags"), ("n", "new idea"),
-    ("a", "add step"), ("tab", "steps"), ("e", "edit"), ("c", "copy resume"), ("/", "filter"), ("q", "quit"),
-])
-STEP_KEYS = key_line([  # while the Steps list has focus
-    ("a", "add"), ("enter", "edit"), ("shift+↑↓", "move"), ("d", "delete"), ("space", "check"), ("esc", "back"),
-])
+    ("a", "add step"), ("tab", "steps"), ("x", "hide done"), ("e", "edit"), ("c", "copy resume"), ("/", "filter"),
+    ("q", "quit"),
+]
+STEP_KEYS = [  # while the Steps list has focus
+    ("a", "add"), ("enter", "edit"), ("shift+↑↓", "move"), ("d", "delete"), ("space", "check"),
+    ("x", "hide done"), ("esc", "back"),
+]
 
 
 def status_text(status: str, label: str | None = None) -> Text:
@@ -333,6 +345,19 @@ class StepScreen(ModalScreen[tuple[str, str] | None]):
         self.dismiss((text, self.kind) if text else None)
 
 
+class KeyBar(Static):
+    """The footer's keys, rewrapped to its width whenever the terminal changes size."""
+
+    keys: list[tuple[str, str]] = []
+
+    def show(self, keys: list[tuple[str, str]]) -> None:
+        self.keys = keys
+        self.update(key_line(keys, self.content_size.width))
+
+    def on_resize(self) -> None:
+        self.update(key_line(self.keys, self.content_size.width))
+
+
 class StepList(ListView):
     BINDINGS = [
         Binding("space", "app.toggle_step", "toggle step"),
@@ -343,10 +368,10 @@ class StepList(ListView):
     ]
 
     def on_focus(self) -> None:
-        self.app.query_one("#keys", Static).update(STEP_KEYS)
+        self.app.show_keys(steps=True)
 
     def on_blur(self) -> None:
-        self.app.query_one("#keys", Static).update(KEYS)
+        self.app.show_keys(steps=False)
 
 
 # ---------- app ----------
@@ -386,6 +411,7 @@ class RumoApp(App):
         Binding("t", "tags", "tags"),
         Binding("n", "new_idea", "new idea"),
         Binding("a", "add_step", "add step"),
+        Binding("x", "toggle_done", "done steps"),
         Binding("e", "edit", "edit"),
         Binding("c", "copy_resume", "copy resume"),
         Binding("slash", "filter", "filter"),
@@ -402,6 +428,8 @@ class RumoApp(App):
         self.filter_text = ""
         self.show_older = False
         self.view = "timeline"
+        self.hide_done = False  # done steps hidden in the detail of every item (remembered)
+        self.shown: list[items.Step] = []  # the steps the list shows, in order
         self.horizon = "now"  # one horizon at a time; never remembered, rumo always opens on Now
         self.mtimes: dict[str, float] = {}
         self.load_state()
@@ -413,18 +441,19 @@ class RumoApp(App):
             with VerticalScroll(id="detail"):
                 yield Static(id="header")
                 yield Markdown(id="body")
-                yield Label("Steps", classes="section")
+                yield Label("Steps", classes="section", id="steps-title")
                 yield StepList(id="steps")
                 yield Label("Sessions  (c copies the resume command)", classes="section")
                 yield ListView(id="sessions")
         yield Static(id="legend")
-        yield Static(KEYS, id="keys")
+        yield KeyBar(id="keys")
 
     def on_mount(self) -> None:
         self.cfg.folder.mkdir(parents=True, exist_ok=True)
         if not self.cfg.error:
             config.ensure_file(self.config_path, self.cfg.folder, self.cfg.language)
         self.reload()
+        self.show_keys(steps=False)
         self.query_one("#timeline", OptionList).focus()
         self.set_interval(2.0, self.check_changes)
 
@@ -693,7 +722,9 @@ class RumoApp(App):
         step_index, session_index = steps.index, sessions.index
         steps.clear()
         sessions.clear()
+        self.shown = []
         if item is None:
+            self.query_one("#steps-title", Label).update("Steps")
             header.update(Text("Nothing selected.", "dim"))
             body.update("")
             return
@@ -716,12 +747,17 @@ class RumoApp(App):
                 parts.append(f"**{name.capitalize()}**\n\n{content}")
         body.update("\n\n".join(parts))
 
-        steps.extend(ListItem(Label(self.step_label(s))) for s in item.steps)
+        self.shown = [s for s in item.steps if not (self.hide_done and s.done)]
+        hidden = len(item.steps) - len(self.shown)
+        self.query_one("#steps-title", Label).update(
+            Text.assemble("Steps", (f"  {hidden} done hidden · x shows them", "dim") if hidden else "")
+        )
+        steps.extend(ListItem(Label(self.step_label(s))) for s in self.shown)
         sessions.extend(
             ListItem(Label(Text.assemble((s.when, "dim"), "  ", s.repo, "  ", (s.id[:8], "cyan"), (" closed" if s.closed else "", "dim"))))
             for s in reversed(item.sessions)
         )
-        if item.steps:
+        if self.shown:
             self.select_step(step_index or 0)
         if item.sessions:
             sessions.index = min(session_index or 0, len(item.sessions) - 1)
@@ -754,34 +790,47 @@ class RumoApp(App):
     # The view survives restarts, in state.json: config.toml only ever changes when the user
     # edits a group.
     def load_state(self) -> None:
-        if (view := config.load_state(self.config_path).get("view")) in VIEWS:
+        state = config.load_state(self.config_path)
+        if (view := state.get("view")) in VIEWS:
             self.view = view
+        self.hide_done = state.get("hide_done") is True
 
     def save_state(self) -> None:
-        config.update_state(self.config_path, view=self.view)
+        config.update_state(self.config_path, view=self.view, hide_done=self.hide_done)
+
+    def action_toggle_done(self) -> None:
+        self.hide_done = not self.hide_done
+        self.save_state()
+        self.show_detail()
+        self.show_keys(steps=self.query_one("#steps", ListView).has_focus)
+
+    def show_keys(self, steps: bool) -> None:
+        """The footer: the step keys while the Steps list has focus, and `x` saying what it does now."""
+        done = ("x", "show done" if self.hide_done else "hide done")
+        keys = [done if key == "x" else (key, label) for key, label in (STEP_KEYS if steps else KEYS)]
+        self.query_one("#keys", KeyBar).show(keys)
 
     def action_toggle_step(self) -> None:
         item = self.current_item()
         index = self.query_one("#steps", ListView).index
-        if item is None or index is None or index >= len(item.steps):
+        if item is None or index is None or index >= len(self.shown):
             return
-        step = item.steps[index]
+        step = self.shown[index]
         self.write(lambda: items.toggle_step(item, step))
 
     def focused_step(self) -> tuple[Item, int] | None:
-        """The current item and its highlighted step, when the Steps list has focus."""
+        """The current item and the index (among the shown steps) of its highlighted step, when the Steps list has focus."""
         item = self.current_item()
         steps = self.query_one("#steps", ListView)
-        if item is None or not steps.has_focus or steps.index is None or steps.index >= len(item.steps):
+        if item is None or not steps.has_focus or steps.index is None or steps.index >= len(self.shown):
             return None
         return item, steps.index
 
     def select_step(self, index: int) -> None:
-        item = self.current_item()
-        if not item or not item.steps:
+        if not self.shown:
             return
         steps = self.query_one("#steps", ListView)
-        steps.index = max(0, min(index, len(item.steps) - 1))
+        steps.index = max(0, min(index, len(self.shown) - 1))
 
         # Right after a rebuild the highlight lands on a row about to be removed: draw it again after.
         def highlight() -> None:
@@ -799,14 +848,15 @@ class RumoApp(App):
             self.notify("This item is done. Reopen it first (s), then add the step.", severity="warning")
             return
         focused = self.focused_step()
-        after = item.steps[focused[1]] if focused else None
+        after = self.shown[focused[1]] if focused else None
 
         def added(answer: tuple[str, str] | None) -> None:
             if answer:
                 landed: list[int] = []
                 self.write(lambda: landed.append(items.add_step(item, *answer, after=after)))
-                if landed:
-                    self.select_step(landed[0])
+                fresh = self.current_item()
+                if landed and fresh and landed[0] < len(fresh.steps) and fresh.steps[landed[0]] in self.shown:
+                    self.select_step(self.shown.index(fresh.steps[landed[0]]))
 
         self.push_screen(StepScreen(f"New step in “{item.title}”"), added)
 
@@ -814,7 +864,7 @@ class RumoApp(App):
         if (focused := self.focused_step()) is None:
             return
         item, index = focused
-        step = item.steps[index]
+        step = self.shown[index]
 
         def edited(answer: tuple[str, str] | None) -> None:
             if answer and answer != (step.text, step.kind):
@@ -826,16 +876,17 @@ class RumoApp(App):
         if (focused := self.focused_step()) is None:
             return
         item, index = focused
-        moved: list[bool] = []
-        self.write(lambda: moved.append(items.move_step(item, item.steps[index], delta)))
-        if moved and moved[0]:
-            self.select_step(index + delta)
+        if not 0 <= index + delta < len(self.shown):
+            return
+        step, other = self.shown[index], self.shown[index + delta]  # the neighbor on screen: hidden steps stay put
+        self.write(lambda: items.swap_steps(item, step, other))
+        self.select_step(index + delta)
 
     def action_delete_step(self) -> None:
         if (focused := self.focused_step()) is None:
             return
         item, index = focused
-        step = item.steps[index]
+        step = self.shown[index]
 
         def confirmed(answer: str | None) -> None:
             if answer == "delete":

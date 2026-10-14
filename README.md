@@ -74,6 +74,7 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | `e` | open the item in `$EDITOR` |
 | `a` | add a step to the selected item, after its open steps (below the highlighted one when the steps have focus); in the dialog, Tab switches `[agent]` and `[manual]` |
 | Enter, shift+↑ ↓, `d`, space | with the steps focused: edit, move, delete (asks first) or check the highlighted step; Esc goes back |
+| `x` | hide or show the done steps of every item (rumo remembers it) |
 | `c` | copy the command that resumes the selected agent session |
 | `/` | filter by title, tag, group or text (Esc clears) |
 | `q` | quit |
