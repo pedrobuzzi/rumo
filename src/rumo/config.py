@@ -232,11 +232,21 @@ def state_path(config_path: Path) -> Path:
 
 
 def load_state(config_path: Path) -> dict:
-    try:
-        data = json.loads(state_path(config_path).read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return {}
-    return data if isinstance(data, dict) else {}
+    return _read_state(config_path) or {}
+
+
+def _read_state(config_path: Path) -> dict | None:
+    """state.json as a dict ({} when missing or broken), or None while it cannot be read."""
+    for _ in range(50):
+        try:
+            data = json.loads(state_path(config_path).read_text(encoding="utf-8"))
+        except PermissionError:  # Windows: another process is replacing it right now
+            time.sleep(0.01)
+            continue
+        except (OSError, ValueError):
+            return {}
+        return data if isinstance(data, dict) else {}
+    return None
 
 
 def update_state(config_path: Path, **changes: object) -> None:
@@ -248,8 +258,11 @@ def update_state(config_path: Path, **changes: object) -> None:
     path = state_path(config_path)
     tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
+        state = _read_state(config_path)
+        if state is None:
+            return  # never write only these keys over a state that could not be read
         path.parent.mkdir(parents=True, exist_ok=True)
-        tmp.write_text(json.dumps(load_state(config_path) | changes) + "\n", encoding="utf-8")
+        tmp.write_text(json.dumps(state | changes) + "\n", encoding="utf-8")
         for attempt in range(5):
             try:
                 os.replace(tmp, path)

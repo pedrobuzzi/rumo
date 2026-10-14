@@ -294,6 +294,26 @@ class ConfigTest(unittest.TestCase):
         self.assertGreater(reads, 0)
         self.assertEqual([p.name for p in self.root.iterdir()], ["state.json"])
 
+    def test_a_state_being_replaced_is_read_again_and_never_written_over(self):
+        # Windows refuses to open a file while another process replaces it (PermissionError).
+        from unittest import mock
+
+        config.update_state(self.path, keep="me")
+        read = Path.read_text
+        refusals = iter([True, True])
+
+        def busy(path, *args, **kwargs):
+            if path.name == "state.json" and next(refusals, False):
+                raise PermissionError(13, "Access is denied")
+            return read(path, *args, **kwargs)
+
+        with mock.patch.object(Path, "read_text", busy):
+            self.assertEqual(config.load_state(self.path), {"keep": "me"})
+        with mock.patch.object(Path, "read_text", side_effect=PermissionError(13, "Access is denied")):
+            self.assertEqual(config.load_state(self.path), {})
+            config.update_state(self.path, n=1)  # unreadable: writing only its own keys would wipe the rest
+        self.assertEqual(config.load_state(self.path), {"keep": "me"})
+
     def test_missing_file_gives_defaults_with_the_system_language(self):
         cfg = config.load(self.path)
         self.assertEqual(cfg.language, "en")
