@@ -13,6 +13,7 @@ from collections.abc import Callable
 from datetime import date, datetime
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import cast
 
 from rich.cells import cell_len
 from rich.style import Style
@@ -424,10 +425,10 @@ class StepList(ListView):
     ]
 
     def on_focus(self) -> None:
-        self.app.show_keys("steps")
+        cast(RumoApp, self.app).show_keys("steps")
 
     def on_blur(self) -> None:
-        self.app.show_keys()
+        cast(RumoApp, self.app).show_keys()
 
 
 class PRList(ListView):
@@ -439,10 +440,10 @@ class PRList(ListView):
     ]
 
     def on_focus(self) -> None:
-        self.app.show_keys("prs")
+        cast(RumoApp, self.app).show_keys("prs")
 
     def on_blur(self) -> None:
-        self.app.show_keys()
+        cast(RumoApp, self.app).show_keys()
 
 
 # ---------- app ----------

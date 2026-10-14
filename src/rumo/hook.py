@@ -27,7 +27,7 @@ import os
 import re
 import shlex
 import sys
-from collections.abc import Iterator
+from collections.abc import Collection, Iterator
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -131,7 +131,7 @@ def seen_steps(cfg: config.Config, session_id: str) -> dict:
     return session if isinstance(session, dict) else {}
 
 
-def remember_steps(cfg: config.Config, session_id: str, linked: list[items.Item], keep: set[str] = frozenset()) -> None:
+def remember_steps(cfg: config.Config, session_id: str, linked: list[items.Item], keep: Collection[str] = ()) -> None:
     """Note the steps the agent has now seen; items in `keep` hold on to what it saw before."""
     seen = config.load_state(cfg.path).get("steps_seen")
     seen = seen if isinstance(seen, dict) else {}

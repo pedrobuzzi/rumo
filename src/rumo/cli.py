@@ -8,6 +8,7 @@ without asking, so the skill only ever runs `rumo ...`.
 
 from __future__ import annotations
 
+import io
 import os
 import sys
 
@@ -22,6 +23,10 @@ Inside an AI agent session, type /rumo for the agent commands.
 def main(argv: list[str] | None = None) -> None:
     args = sys.argv[1:] if argv is None else argv
     command = args[0] if args else ""
+
+    if command and isinstance(sys.stdout, io.TextIOWrapper):
+        # Agents read the output as UTF-8; Windows pipes default to the locale's code page.
+        sys.stdout.reconfigure(encoding="utf-8")
 
     # Late imports: `rumo hook` runs on every prompt and must not pay for Textual.
     if command == "":

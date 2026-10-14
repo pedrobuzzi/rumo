@@ -59,6 +59,12 @@ class AgentCommandsTest(unittest.TestCase):
         self.assertRegex(self.session_line(repo / "src"), r"^- \d{4}-\d\d-\d\d \d\d:\d\d \| web-app \(feature/x\) \| s1 \| "
                          + re.escape(str(repo / "src")) + "$")
 
+    def test_speaks_utf8_even_on_a_non_utf8_console(self):
+        # Windows pipes default to the locale's code page; the agent reads the output as UTF-8.
+        self.env |= {"PYTHONIOENCODING": "cp1252", "PYTHONUTF8": "0"}
+        for command in ("index", "now"):
+            self.assertIn("Migração do logout", self.rumo(command, session="open-session").stdout, command)
+
     def test_outside_a_repository_the_folder_names_the_session(self):
         notes = self.root / "notes"
         notes.mkdir()

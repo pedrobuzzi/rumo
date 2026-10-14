@@ -7,7 +7,7 @@ from pathlib import Path
 
 from rich.console import Console
 from textual.screen import ModalScreen
-from textual.widgets import Input, Label, ListItem, OptionList, Static
+from textual.widgets import Input, Label, ListItem, ListView, OptionList, Static
 
 from rumo import config, items, prs
 from rumo.app import GroupScreen, RumoApp
@@ -455,7 +455,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press(*"Atualizar docs", "tab", "enter")
             await pilot.pause()
             self.assertEqual(self.steps()[-1], "  manual Atualizar docs")
-            self.assertEqual(app.query_one("#steps").index, 2)
+            self.assertEqual(app.query_one("#steps", ListView).index, 2)
 
     async def test_in_the_steps_a_adds_below_and_enter_edits_the_highlighted_step(self):
         app = self.app()
@@ -475,7 +475,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("down", "shift+up")
             await pilot.pause()
             self.assertEqual(self.steps(), ["  manual Pedir review", "x agent Ajustar handler"])
-            self.assertEqual(app.query_one("#steps").index, 0)
+            self.assertEqual(app.query_one("#steps", ListView).index, 0)
             await pilot.press("d", "escape")
             await pilot.pause()
             self.assertEqual(len(self.steps()), 2)
@@ -558,7 +558,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("down", "shift+up")  # Dois swaps with Um, skipping the hidden one
             await pilot.pause()
             self.assertEqual(self.steps(), ["  agent Dois", "x agent Feito", "  agent Um", "  agent Tres"])
-            self.assertEqual(app.query_one("#steps").index, 0)
+            self.assertEqual(app.query_one("#steps", ListView).index, 0)
             await pilot.press("down", "space")  # checks Um, which then hides
             await pilot.pause()
             self.assertEqual(self.steps(), ["  agent Dois", "x agent Feito", "x agent Um", "  agent Tres"])
@@ -566,7 +566,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("a", *"Quatro", "enter")  # below the highlighted Tres
             await pilot.pause()
             self.assertEqual(self.steps()[-1], "  agent Quatro")
-            self.assertEqual(app.query_one("#steps").index, 2)
+            self.assertEqual(app.query_one("#steps", ListView).index, 2)
 
     async def test_the_steps_grow_with_the_pane_instead_of_scrolling_on_their_own(self):
         body = "## Steps\n" + "".join(f"- [ ] [agent] Passo {n}\n" for n in range(1, 21))
