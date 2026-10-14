@@ -90,10 +90,7 @@ def how_to_create() -> str:
 
 
 def linked_items(cfg: config.Config, session_id: str) -> list[items.Item]:
-    return [
-        item for item in items.list_items(cfg.folder)
-        if any(s.id == session_id and not s.closed for s in item.sessions)
-    ]
+    return [item for item in items.list_items(cfg.folder) if item.linked_to(session_id)]
 
 
 def reminder(cfg: config.Config, session_id: str) -> str:
@@ -160,7 +157,7 @@ def outside_changes(item: items.Item, before: object) -> str:
 def session_start(cfg: config.Config, session_id: str, payload: dict) -> str:
     """Tell a session without an item what is in progress here, so "what is left?" has an answer."""
     every = items.list_items(cfg.folder)
-    if any(s.id == session_id and not s.closed for item in every for s in item.sessions):
+    if any(item.linked_to(session_id) for item in every):
         return ""  # linked (a resumed session): the prompt reminder already lists its steps
     in_progress = items.timeline(every).now
     if not in_progress:

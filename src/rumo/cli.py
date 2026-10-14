@@ -2,10 +2,13 @@
 
 Other subcommands exist for the agent and the hook, and are kept out of
 the help on purpose: `hook`, `index`, `now`, `path`, `group-add`, `ask-to-track`, `--version`.
+`index` reads the session id itself: Claude Code refuses to run a command that expands a variable
+without asking, so the skill only ever runs `rumo ...`.
 """
 
 from __future__ import annotations
 
+import os
 import sys
 
 USAGE = """rumo: your work, past, now and later.
@@ -34,7 +37,7 @@ def main(argv: list[str] | None = None) -> None:
 
         print(config.load().folder)
     elif command == "index":
-        _index()
+        _index(args[1:])
     elif command == "now":
         _now()
     elif command == "group-add":
@@ -52,18 +55,35 @@ def main(argv: list[str] | None = None) -> None:
         raise SystemExit(2)
 
 
-def _index() -> None:
-    """Everything the agent needs in one call: where items live, the content language, tags, groups and items."""
+def _index(rest: list[str]) -> None:
+    """`rumo index [<folder>]`: everything the agent needs in one call. Where items live, the content
+    language, tags, groups, the time, this session, the items it keeps updated and the line that links
+    it to another one, then the items.
+
+    The folder is where the session started (by default the current one): `claude --resume` only finds
+    the session from there.
+    """
+    from datetime import datetime
+
     from rumo import config, items
 
     cfg = config.load()
+    all_items = items.list_items(cfg.folder)
+    session = os.environ.get("CLAUDE_CODE_SESSION_ID", "")
     print(f"# folder: {cfg.folder}")
     print(f"# config: {cfg.path}")
     print(f"# language: {cfg.language}")
     print(f"# tags: {', '.join(cfg.tags)}")
     print(f"# groups: {', '.join(f'{g.key} ({g.name}, {g.color})' for g in cfg.groups.values()) or '-'}")
     print(f"# colors: {', '.join(config.PALETTE)}")
-    if listing := items.index(items.list_items(cfg.folder)):
+    print(f"# now: {datetime.now():%Y-%m-%d %H:%M}")
+    if session:
+        print(f"# session: {session}")
+        print(f"# linked: {', '.join(i.slug for i in all_items if i.linked_to(session)) or '-'}")
+        print(f"# session-line: {_session_line(session, rest[0] if rest else os.getcwd())}")
+    else:
+        print("# session: none (simple mode: sessions can't be linked)")
+    if listing := items.index(all_items):
         print(listing)
 
 
@@ -77,6 +97,25 @@ def _now() -> None:
         print(f"{item.title} | {item.status} | next: {step.label if step else 'no open steps'} | {item.path}")
     if not in_progress:
         print("Nothing in progress.")
+
+
+def _session_line(session: str, folder: str) -> str:
+    """The Sessions line of an item: when, the repository and branch of the folder, the session and the folder."""
+    import subprocess
+    from datetime import datetime
+
+    folder = os.path.abspath(os.path.expanduser(folder))
+
+    def git(*args: str) -> str:
+        try:
+            done = subprocess.run(["git", "-C", folder, *args], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.TimeoutExpired):
+            return ""
+        return done.stdout.strip() if done.returncode == 0 else ""
+
+    repo = os.path.basename(git("rev-parse", "--show-toplevel") or folder)
+    branch = git("symbolic-ref", "--short", "-q", "HEAD") or "-"
+    return f"- {datetime.now():%Y-%m-%d %H:%M} | {repo} ({branch}) | {session} | {folder}"
 
 
 def _group_add(rest: list[str]) -> None:

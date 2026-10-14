@@ -30,6 +30,14 @@ class PackagingTest(unittest.TestCase):
             # An old `rumo` without this event, or none at all, must never block the session.
             self.assertTrue(command.endswith("|| true"), event)
 
+    def test_the_skill_only_runs_rumo_commands_it_may_run_without_asking(self):
+        # Claude Code refuses a command that expands a variable ("A variable in this command can't be
+        # checked before it runs"), so the session id and the session line come from `rumo index`.
+        skill = (ROOT / "skills" / "rumo" / "SKILL.md").read_text(encoding="utf-8")
+        self.assertRegex(skill, r"(?m)^allowed-tools: Bash\(rumo:\*\)$")
+        for expansion in ("$CLAUDE", "$(", "${"):
+            self.assertNotIn(expansion, skill)
+
     def test_homebrew_formula_ignores_the_users_global_python_packages(self):
         # A legacy `*-nspkg.pth` in Homebrew Python's global site-packages (left by packages installed
         # there with pip) breaks pip's isolated builds inside the formula's virtualenv.

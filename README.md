@@ -42,6 +42,10 @@ system language.
   /plugin install rumo@rumo
   ```
 
+  `/rumo` runs its `rumo` commands without asking. To let the agent run them without asking in later
+  answers too (to link an item it offered to create, for example), add `"Bash(rumo:*)"` to
+  `permissions.allow` in `~/.claude/settings.json`.
+
 - **Codex, Gemini CLI, Cursor, GitHub Copilot and other agents** that read `SKILL.md` files,
   simple mode (create items and ideas, list and search them; no automatic updates):
 

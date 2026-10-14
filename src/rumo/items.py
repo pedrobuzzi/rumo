@@ -102,6 +102,10 @@ class Item:
     def next_step(self) -> Step | None:
         return next((s for s in self.steps if not s.done), None)
 
+    def linked_to(self, session_id: str) -> bool:
+        """Whether that agent session keeps this item updated: its line is there and not closed."""
+        return any(s.id == session_id and not s.closed for s in self.sessions)
+
 
 def load(path: Path) -> Item:
     mtime = path.stat().st_mtime
