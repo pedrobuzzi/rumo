@@ -415,6 +415,11 @@ class KeyBar(Static):
         self.update(key_line(self.keys, self.content_size.width))
 
 
+def wrapping_row(mark: Text, text: Text) -> ListItem:
+    """A list row whose text wraps, going on under itself rather than under the mark."""
+    return ListItem(Label(mark, classes="mark"), Label(text, classes="text"), classes="wrapping")
+
+
 class StepList(ListView):
     BINDINGS = [
         Binding("space", "app.toggle_step", "toggle step"),
@@ -463,6 +468,8 @@ class RumoApp(App):
     #header { margin-bottom: 1; }
     .section { text-style: bold; color: $accent; margin-top: 1; }
     #steps, #prs, #sessions { height: auto; }
+    .wrapping { layout: horizontal; }
+    .wrapping > .text, #sessions Label { width: 1fr; }
     Markdown { margin: 0; padding: 0; }
     #footer { height: auto; }
     #legend, #keys { height: auto; padding: 0 1; }
@@ -862,13 +869,13 @@ class RumoApp(App):
         self.query_one("#steps-title", Label).update(
             Text.assemble("Steps", (f"  {hidden} done hidden · x shows them", "dim") if hidden else "")
         )
-        steps.extend(ListItem(Label(self.step_label(s))) for s in self.shown)
+        steps.extend(self.step_row(s) for s in self.shown)
         if has_prs:
             guessed = self.gh is None and any(not p.finished and "/pull/" in p.url for p in item.prs)
             self.query_one("#prs-title", Label).update(Text.assemble(
                 "PRs", ("  (enter opens" + (" · no gh: states as written" if guessed else " the link") + ")", "dim")
             ))
-            pull_requests.extend(ListItem(Label(self.pr_label(p))) for p in item.prs)
+            pull_requests.extend(self.pr_row(p) for p in item.prs)
             self.highlight(pull_requests, pr_index or 0)
         sessions.extend(
             ListItem(Label(Text.assemble((s.when, "dim"), "  ", s.repo, "  ", (s.id[:8], "cyan"), (" closed" if s.closed else "", "dim"))))
@@ -880,20 +887,19 @@ class RumoApp(App):
             sessions.index = min(session_index or 0, len(item.sessions) - 1)
 
     @staticmethod
-    def pr_label(pr: items.PR) -> Text:
+    def pr_row(pr: items.PR) -> ListItem:
         """`● web-app#12  Logout novo  open`, the name linked to the PR."""
         color = PR_COLORS.get(pr.state, "dim")
-        return Text.assemble(
-            ("●" if pr.state else "?", color), " ", (pr.name, Style(link=pr.url)),
-            f"  {pr.title}" if pr.title else "", (f"  {pr.state or 'state unknown'}", color),
-        )
+        return wrapping_row(Text("● " if pr.state else "? ", color), Text.assemble(
+            (pr.name, Style(link=pr.url)), f"  {pr.title}" if pr.title else "", (f"  {pr.state or 'state unknown'}", color),
+        ))
 
     @staticmethod
-    def step_label(step: items.Step) -> Text:
+    def step_row(step: items.Step) -> ListItem:
         kind = f"[{step.kind}] " if step.kind else ""
         if step.done:
-            return Text(f"[x] {kind}{step.text}", "dim strike")
-        return Text.assemble("[ ] ", (kind, "yellow" if step.kind == "manual" else "dim"), step.text)
+            return wrapping_row(Text(f"[x] {kind}", "dim strike"), Text(step.text, "dim strike"))
+        return wrapping_row(Text.assemble("[ ] ", (kind, "yellow" if step.kind == "manual" else "dim")), Text(step.text))
 
     # ---------- actions ----------
 

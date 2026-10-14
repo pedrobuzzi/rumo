@@ -518,8 +518,25 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertIn("tab steps", keys())
 
+    @staticmethod
+    def row_labels(app: RumoApp, selector: str) -> list[str]:
+        return ["".join(str(label.render()) for label in row.query(Label)) for row in app.query_one(selector).query(ListItem)]
+
     def shown_steps(self, app: RumoApp) -> list[str]:
-        return [str(row.query_one(Label).render()) for row in app.query_one("#steps").query(ListItem)]
+        return self.row_labels(app, "#steps")
+
+    async def test_a_long_step_wraps_and_goes_on_under_its_own_text(self):
+        long = "Avaliar o api-crm arquivado que ainda é chamado por dialetos antigos do app mobile"
+        self.logout.write_text(self.logout.read_text(encoding="utf-8").replace("Pedir review", long), encoding="utf-8")
+        app = self.app()
+        async with app.run_test(size=(80, 30)) as pilot:
+            await pilot.pause()
+            row = app.query_one("#steps").query(ListItem).last()
+            mark, text = row.query(Label)
+            self.assertGreater(row.region.height, 1)  # wrapped, not cut at the edge
+            self.assertEqual(text.region.x, mark.region.x + len("[ ] [manual] "))
+            self.assertLessEqual(text.region.right, row.region.right)
+            self.assertEqual(self.shown_steps(app)[-1], f"[ ] [manual] {long}")
 
     async def test_x_hides_the_done_steps_of_every_item_and_shows_them_again(self):
         app = self.app()
@@ -602,7 +619,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
         return [f"{p.state} {p.name} {p.title}".strip() for p in items.load(self.logout).prs]
 
     def shown_prs(self, app: RumoApp) -> list[str]:
-        return [str(row.query_one(Label).render()) for row in app.query_one("#prs").query(ListItem)]
+        return self.row_labels(app, "#prs")
 
     async def test_the_detail_lists_the_prs_with_their_state(self):
         self.add_prs()
