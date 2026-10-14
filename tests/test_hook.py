@@ -307,8 +307,8 @@ class StopHookTest(unittest.TestCase):
 
     def session_start(self, session: str, cwd: Path) -> str:
         payload = {"session_id": session, "hook_event_name": "SessionStart", "source": "startup", "cwd": str(cwd)}
-        result = subprocess.run([sys.executable, "-m", "rumo.cli", "hook"], input=json.dumps(payload),
-                                capture_output=True, text=True, encoding="utf-8", env=self.env)
+        result = subprocess.run([sys.executable, "-m", "rumo.cli", "hook"], input=json.dumps(payload),  # run where the session is
+                                capture_output=True, text=True, encoding="utf-8", env=self.env, cwd=cwd)
         self.assertEqual(result.returncode, 0, result.stderr)
         if not result.stdout:
             return ""
@@ -352,6 +352,14 @@ class StopHookTest(unittest.TestCase):
         message = self.session_start("new-session", home)
         self.assertIn("Home (doing", message)
         self.assertNotIn("Notes (doing", message)
+
+    def test_a_session_line_without_a_folder_is_from_no_repository(self):
+        repo = self.repo()
+        self.add_item("blank", "doing", "")
+        self.add_item("relative", "doing", "web-app")
+        message = self.session_start("new-session", repo)
+        self.assertNotIn("Blank", message)
+        self.assertNotIn("Relative", message)
 
     def test_session_start_is_silent_when_linked_or_with_nothing_in_progress(self):
         self.assertEqual(self.session_start("open-session", self.root), "")  # the prompt reminder covers it
@@ -415,6 +423,7 @@ class StopHookTest(unittest.TestCase):
     def test_adding_a_pr_still_asks_for_the_steps_when_the_agent_left_them(self):
         message = self.stop("open-session", ran(tool("Bash", command="gh pr create"), "https://github.com/acme/web-app/pull/12"))
         self.assertIn("no linked item changed", message)
+        self.assertIn("rumo already added https://github.com/acme/web-app/pull/12", message)  # so it does not say it is missing
 
     def test_the_branch_of_each_turn_is_noted_for_the_linked_items(self):
         repo = self.root / "web-app"
@@ -422,6 +431,41 @@ class StopHookTest(unittest.TestCase):
         (repo / ".git" / "HEAD").write_text("ref: refs/heads/feature/checkout\n", encoding="utf-8")
         self.stop("open-session", tool("Read", file_path="/repo/a.py"), cwd=repo)
         self.assertEqual(self.state()["pr_branches"], {str(self.item): [[str(repo), "feature/checkout"]]})
+
+    def test_the_draft_flag_is_read_per_tool_and_never_inside_a_title(self):
+        self.stop("open-session", ran(tool("Bash", command='glab mr create -d "Fixes login -d"'),
+                                      "!34 Fixes login\n https://gitlab.com/acme/api/-/merge_requests/34\n"))
+        self.stop("open-session", ran(tool("Bash", command='gh pr create --title "Add -d flag" --body "--draft later"'),
+                                      "https://github.com/acme/web-app/pull/12"))
+        self.stop("open-session", ran(tool("Bash", command="glab mr create --draft --fill"),
+                                      "https://gitlab.com/acme/api/-/merge_requests/35"))
+        self.assertEqual(self.prs(), ["open api!34", "open web-app#12", "draft api!35"])
+
+    def test_links_printed_by_other_commands_of_the_same_call_are_not_taken(self):
+        self.stop("open-session", ran(tool("Bash", command="git push && gh pr list"),
+                                      "To github.com:acme/web-app.git\n#7  Old  https://github.com/acme/web-app/pull/7\n"))
+        self.stop("open-session", ran(tool("Bash", command="git push && git log -3"),
+                                      "commit abc\n\n    Follow-up of\n    https://github.com/acme/web-app/pull/8\n"))
+        self.stop("open-session", ran(tool("Bash", command="gh pr view 5 --json url; gh pr create --fill"),
+                                      '{"url":"https://github.com/acme/web-app/pull/5"}\nhttps://github.com/acme/web-app/pull/12\n'))
+        self.assertEqual(self.prs(), ["open web-app#12"])
+
+    def test_with_several_linked_items_only_the_ones_the_turn_edited_note_the_branch(self):
+        repo = self.root / "web-app"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/feat\n", encoding="utf-8")
+        other = self.folder / "outro.md"
+        other.write_text("---\ntitle: Outro\nstatus: doing\n---\n\n## Sessions\n- 2026-10-11 10:08 | w (main) | open-session | /w\n", encoding="utf-8")
+        self.stop("open-session", tool("Read", file_path="/repo/a.py"), cwd=repo)
+        self.assertNotIn("pr_branches", self.state())  # which item? none was edited: no guess
+        self.stop("open-session", tool("Edit", file_path=str(other)), cwd=repo)
+        self.assertEqual(self.state()["pr_branches"], {str(other): [[str(repo), "feat"]]})
+
+    def test_the_agents_own_step_edits_through_the_shell_are_not_pointed_out(self):
+        self.stop("open-session")
+        self.edit_item("- [ ] [manual] Pedir review da PR", "- [x] [manual] Pedir review da PR")
+        self.stop("open-session", tool("Bash", command=f"sed -i '' 's/- \\[ \\] \\[manual\\] Pedir/- [x] [manual] Pedir/' '{self.item}'"))
+        self.assertNotIn("changed outside", self.prompt("open-session"))
 
     def test_the_prompt_names_the_prs_still_open(self):
         self.edit_item("\n## Sessions", "\n## PRs\n- [open] https://github.com/acme/web-app/pull/12 Logout\n"

@@ -328,8 +328,13 @@ def pr_links(text: str) -> list[str]:
     return list(dict.fromkeys(_PR_LINK_RE.findall(text)))
 
 
-def add_pr(item: Item, url: str, state: str = "", title: str = "", now: datetime | None = None) -> bool:
-    """Add a PR at the end of the PRs section (a new one before Sessions if none). False if already there."""
+def add_pr(
+    item: Item, url: str, state: str = "", title: str = "", now: datetime | None = None, touch: bool = True,
+) -> bool:
+    """Add a PR at the end of the PRs section (a new one before Sessions if none). False if already there.
+
+    `touch=False` keeps `updated`: for what rumo learns on its own, which is not work on the item.
+    """
     link = pr_link(url)
     if link is None:
         raise ValueError(f"not a link: {url}")
@@ -349,13 +354,13 @@ def add_pr(item: Item, url: str, state: str = "", title: str = "", now: datetime
         else:
             lines.extend(([""] if lines and lines[-1].strip() else []) + ["## PRs", line])
 
-    _save(item, edit, _stamp(now))
+    _save(item, edit, _stamp(now) if touch else None)
     return True
 
 
 def update_pr(
     item: Item, pr: PR, state: str | None = None, title: str | None = None, url: str | None = None,
-    now: datetime | None = None,
+    now: datetime | None = None, touch: bool = True,
 ) -> None:
     link = pr.url if url is None else pr_link(url)
     if link is None:
@@ -365,7 +370,7 @@ def update_pr(
     def edit(lines: list[str], offset: int) -> None:
         lines[_pr_at(item, lines, pr, offset)] = line
 
-    _save(item, edit, _stamp(now))
+    _save(item, edit, _stamp(now) if touch else None)
 
 
 def delete_pr(item: Item, pr: PR, now: datetime | None = None) -> None:
@@ -422,8 +427,9 @@ def _stamp(now: datetime | None) -> str:
     return (now or datetime.now()).strftime(TIME_FORMAT)
 
 
-def _save(item: Item, edit: Callable[[list[str], int], None], stamp: str) -> None:
-    """Apply `edit` to the file's lines and bump `updated`, unless the file changed since it was read.
+def _save(item: Item, edit: Callable[[list[str], int], None], stamp: str | None) -> None:
+    """Apply `edit` to the file's lines and bump `updated` (unless stamp is None), unless the file
+    changed since it was read.
 
     `edit` gets the offset to add to body line numbers recorded at load time: a file without
     frontmatter gets one prepended, and an unclosed one gets its closing `---` inserted.
@@ -441,7 +447,8 @@ def _save(item: Item, edit: Callable[[list[str], int], None], stamp: str) -> Non
             lines.insert(end, "---")
             offset = 1
     edit(lines, offset)
-    _set_meta(lines, "updated", stamp)
+    if stamp is not None:
+        _set_meta(lines, "updated", stamp)
     tmp = item.path.with_name(item.path.name + ".tmp")
     tmp.write_text("\n".join(lines) + "\n", encoding="utf-8")
     os.replace(tmp, item.path)

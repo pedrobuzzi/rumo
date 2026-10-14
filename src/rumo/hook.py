@@ -25,6 +25,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shlex
 import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -63,10 +64,10 @@ ASK_AGAIN_DAYS = 15  # after the user said not to be asked, remind them the opti
 ASK_AGAIN_SESSIONS = 15
 REMEMBERED_SESSIONS = 200  # sessions already asked or counted, so each one is asked at most once
 
-# What opens a PR: its output names it (GitLab names an existing merge request after a push, too).
-PR_COMMANDS = re.compile(r"\b(?:gh\s+pr\s+create|glab\s+mr\s+create)\b")
-PUSH_COMMAND = re.compile(r"\bgit\s+push\b")
+# What opens a PR names it in its output: the command's link on a line of its own, a tool's first link,
+# and after a push, the merge request GitLab says is open for the branch.
 PR_TOOLS = re.compile(r"create_(?:pull|merge)_request", re.IGNORECASE)  # e.g. mcp__github__create_pull_request
+OPEN_MERGE_REQUEST = re.compile(r"View merge request for [^\n]*:\s*\n(?:remote:)?\s*(\S+)")
 
 # Shell commands that only look around: a turn that ran nothing else did no work to record.
 LOOK_COMMANDS = {
@@ -181,6 +182,8 @@ def session_start(cfg: config.Config, session_id: str, payload: dict) -> str:
     root = repo_root(cwd)
 
     def started_here(folder: str) -> bool:
+        if not folder or not os.path.isabs(folder):
+            return False  # a hand-written line: resolving it against wherever the hook runs would match anything
         path = Path(folder).resolve()
         return path.is_relative_to(root) if root else path == cwd
 
@@ -298,16 +301,22 @@ def stop(cfg: config.Config, session_id: str, payload: dict) -> str:
     turn = last_turn(Path(transcript)) if transcript else None
     # Whether the agent changed an item, told before rumo adds a PR to one itself.
     reached = turn is not None and any(changed_since(item.path, turn.started) for item in linked)
+    added: list[str] = []
     unplaced: list[str] = []
     if linked:
         # An item the agent did not edit in this turn keeps the steps it saw before, so a step the user
         # added meanwhile is still pointed out on the next prompt.
         edited = {str(Path(str(t)).resolve()) for name, i in (turn.tools if turn else []) if name in EDIT_TOOLS
                   if (t := i.get("file_path"))}
+        commands = " ".join(str(i.get("command", "")) for name, i in (turn.tools if turn else []) if name == "Bash")
+        edited |= {str(i.path.resolve()) for i in linked if i.path.name in commands}  # sed, a heredoc...
         remember_steps(cfg, session_id, linked, keep={str(i.path) for i in linked if str(i.path.resolve()) not in edited})
-        prs.note_branch(cfg.path, [str(i.path) for i in linked], str(payload.get("cwd") or os.getcwd()))
+        # The branch and the PRs go to the item this work is for: the only one, or the one the turn edited.
+        target = owner(linked, edited)
+        if target is not None:
+            prs.note_branch(cfg.path, [str(target.path)], str(payload.get("cwd") or os.getcwd()))
         if turn is not None:
-            unplaced = add_opened_prs(linked, edited, turn)
+            added, unplaced = add_opened_prs(linked, target, turn)
     if payload.get("stop_hook_active") or turn is None:
         return ""  # a stop that comes from a nudge: never insist twice in a row
     if not linked:
@@ -326,6 +335,7 @@ def stop(cfg: config.Config, session_id: str, payload: dict) -> str:
         return ""  # the agent waits for an answer (maybe whether to track this); the next reminder follows up
     return (
         f"rumo: this turn did work, but no linked item changed ({', '.join(str(i.path) for i in linked)}). "
+        + (f"rumo already added {', '.join(added)} to its `## PRs`. " if added else "") +
         "Update the Steps of the item this work belongs to: check what is done, add what is new or left for "
         "later, never delete open steps. If the work belongs to none of them, ask the user in one line: track "
         "it as a new item, add it as a step to one of these, or not track it. If they already chose not to "
@@ -334,40 +344,75 @@ def stop(cfg: config.Config, session_id: str, payload: dict) -> str:
     )
 
 
+def owner(linked: list[items.Item], edited: set[str]) -> items.Item | None:
+    """The item this turn's work is for: the only linked one, or the only one it edited; None if unclear."""
+    targets = linked if len(linked) == 1 else [i for i in linked if str(i.path.resolve()) in edited]
+    return targets[0] if len(targets) == 1 else None
+
+
 def opened_prs(turn: Turn) -> list[tuple[str, str]]:
-    """The PRs this turn opened, with their state: the first link in the output of `gh pr create`,
-    `glab mr create` or a tool that creates one, or of a `git push` (GitLab names the open merge request)."""
+    """The PRs this turn opened, with their state."""
     found: dict[str, str] = {}
     for (name, tool_input), output in zip(turn.tools, turn.outputs):
-        command = str(tool_input.get("command", "")) if name == "Bash" else ""
-        if PR_COMMANDS.search(command):
-            state = "draft" if re.search(r"\s(?:--draft|-d)(?=\s|$)", command) else "open"
-        elif PR_TOOLS.search(name):
+        if PR_TOOLS.search(name):
+            links = items.pr_links(output)[:1]
             state = "draft" if tool_input.get("draft") is True else "open"
-        elif PUSH_COMMAND.search(command):
+        elif name == "Bash" and (state := creates_pr(str(tool_input.get("command", "")))) is not None:
+            # gh and glab print the new link on a line of its own; anything else the call printed is not it
+            alone = [link for line in output.splitlines() if (link := line.strip().removeprefix("remote:").strip())
+                     and items.pr_links(link) == [link]]
+            links = alone[-1:]
+        elif name == "Bash" and any(words[:2] == ["git", "push"] for words in commands_in(str(tool_input.get("command", "")))):
+            links = [m for m in OPEN_MERGE_REQUEST.findall(output) if items.pr_links(m) == [m]][:1]
             state = ""  # it exists, but the push does not say whether it is still open
         else:
             continue
-        if links := items.pr_links(output):
-            found.setdefault(links[0], state)
+        for link in links:
+            found.setdefault(link, state)
     return list(found.items())
 
 
-def add_opened_prs(linked: list[items.Item], edited: set[str], turn: Turn) -> list[str]:
-    """Add the PRs the turn opened to the item they belong to; the ones that item is unclear for are returned."""
+def creates_pr(command: str) -> str | None:
+    """"draft" or "open" when the command runs `gh pr create` or `glab mr create`, else None."""
+    for words in commands_in(command):
+        if words[:3] == ["gh", "pr", "create"]:
+            return "draft" if "--draft" in words or "-d" in words else "open"
+        if words[:3] == ["glab", "mr", "create"]:
+            return "draft" if "--draft" in words else "open"  # glab's -d is --description
+    return None
+
+
+def commands_in(command: str) -> list[list[str]]:
+    """The words of each command in a shell line (`a && b; c | d`), quotes kept together."""
+    lexer = shlex.shlex(command, posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        words = list(lexer)
+    except ValueError:  # an unclosed quote
+        words = command.split()
+    found: list[list[str]] = [[]]
+    for word in words:
+        if word and all(c in "();<>|&" for c in word):
+            found.append([])
+        elif not (found[-1] == [] and re.match(r"^\w+=", word)):  # FOO=1 before the program
+            found[-1].append(word)
+    return [w for w in found if w]
+
+
+def add_opened_prs(linked: list[items.Item], target: items.Item | None, turn: Turn) -> tuple[list[str], list[str]]:
+    """Add the PRs the turn opened to the item it worked on: (added, the ones left for the agent to place)."""
     known = {items.pr_link(p.url) for item in linked for p in item.prs}
     opened = [(link, state) for link, state in opened_prs(turn) if link not in known]
-    if not opened:
-        return []
-    targets = linked if len(linked) == 1 else [i for i in linked if str(i.path.resolve()) in edited]
-    if len(targets) != 1:
-        return [link for link, _ in opened]
-    for link, state in opened:
+    added: list[str] = []
+    for n, (link, state) in enumerate(opened):
+        if target is None:
+            return added, [link for link, _ in opened[n:]]
         try:
-            items.add_pr(items.load(targets[0].path), link, state)
+            items.add_pr(items.load(target.path), link, state)
         except (items.WriteConflict, OSError):
-            return [link for link, _ in opened]
-    return []
+            return added, [link for link, _ in opened[n:]]
+        added.append(link)
+    return added, []
 
 
 def only_looks(name: str, tool_input: dict) -> bool:

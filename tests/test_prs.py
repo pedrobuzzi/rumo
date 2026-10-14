@@ -23,8 +23,9 @@ updated: 2026-10-11 16:30
 """
 
 
-def pr(number: int, state: str, title: str = "", draft: bool = False) -> dict:
-    return {"url": f"https://github.com/acme/web-app/pull/{number}", "state": state, "isDraft": draft, "title": title}
+def pr(number: int, state: str, title: str = "", draft: bool = False, created: str = "2026-10-11T12:00:00Z") -> dict:
+    return {"url": f"https://github.com/acme/web-app/pull/{number}", "state": state, "isDraft": draft, "title": title,
+            "createdAt": created}
 
 
 class FakeGh:
@@ -88,6 +89,42 @@ class PullRequestCheckTest(unittest.TestCase):
         prs.refresh(items.load(self.path), [[str(self.repo), "fix/cupom"], [str(self.root / "gone"), "x"]], set(), gh)
         self.assertIn("open web-app#20 Cupom", self.lines())
         self.assertNotIn(str(self.root / "gone"), [folder for _, folder in gh.calls])
+
+
+    def test_a_branch_name_used_before_the_item_existed_brings_no_old_prs(self):
+        gh = FakeGh({"feature/checkout": [pr(15, "MERGED", "Antigo", created="2025-03-01T10:00:00Z"),
+                                          pr(16, "OPEN", "Novo", created="2026-10-10T23:00:00Z")]}, {})
+        prs.refresh(items.load(self.path), [], set(), gh)
+        self.assertNotIn("merged web-app#15 Antigo", self.lines())
+        self.assertIn("open web-app#16 Novo", self.lines())  # a day early: time zones
+
+    def test_shared_branches_are_never_asked_about(self):
+        text = self.path.read_text().replace("(feature/checkout)", "(develop)")
+        self.path.write_text(text.replace("(main)", "(trunk)"), encoding="utf-8")
+        self.assertEqual(prs.branches(items.load(self.path), [[str(self.repo), "dev"]]), [])
+
+    def test_a_refresh_leaves_updated_alone(self):
+        gh = FakeGh({"feature/checkout": [pr(12, "MERGED"), pr(15, "OPEN", "Frete")]}, {})
+        self.assertTrue(prs.refresh(items.load(self.path), [], set(), gh))
+        self.assertEqual(items.load(self.path).meta["updated"], "2026-10-11 16:30")  # gh worked, not the user
+
+    def test_an_item_gone_during_the_check_is_skipped(self):
+        item = items.load(self.path)
+        self.path.unlink()
+        self.assertFalse(prs.refresh(item, [], set(), FakeGh({"feature/checkout": [pr(15, "OPEN")]}, {})))
+
+    def test_each_branch_of_a_repository_is_asked_about_once(self):
+        (self.repo / ".git").mkdir()
+        (self.repo / "src").mkdir()
+        gh = FakeGh({"feature/checkout": [pr(15, "OPEN", "Frete")]}, {})
+        asked: dict = {}
+        prs.refresh(items.load(self.path), [[str(self.repo / "src"), "feature/checkout"]], set(), gh, asked)
+        other = self.root / "other.md"
+        other.write_text(f"---\ntitle: O\n---\n\n## Sessions\n- 2026-10-11 10:08 | web-app (feature/checkout) | x | {self.repo / 'src'}\n",
+                         encoding="utf-8")
+        prs.refresh(items.load(other), [], set(), gh, asked)
+        self.assertEqual(len([args for args, _ in gh.calls if args[:2] == ["pr", "list"]]), 1)
+        self.assertIn("open web-app#15", [f"{p.state} {p.name}" for p in items.load(other).prs])
 
 
 class BranchNotesTest(unittest.TestCase):

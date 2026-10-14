@@ -273,6 +273,27 @@ class ConfigTest(unittest.TestCase):
             if v is not None:
                 os.environ[k] = v
 
+    def test_a_reader_never_sees_a_half_written_state(self):
+        # Hooks of several sessions and the TUI write state.json at the same time: a reader that caught
+        # the file truncated would write back only its own keys and wipe the rest.
+        import threading
+
+        config.update_state(self.path, keep="me", n=0)
+        done = threading.Event()
+
+        def writer() -> None:
+            for n in range(60):
+                config.update_state(self.path, n=n, padding="x" * 2_000_000)
+            done.set()
+
+        threading.Thread(target=writer).start()
+        reads = 0
+        while not done.is_set():
+            self.assertEqual(config.load_state(self.path).get("keep"), "me")
+            reads += 1
+        self.assertGreater(reads, 0)
+        self.assertEqual([p.name for p in self.root.iterdir()], ["state.json"])
+
     def test_missing_file_gives_defaults_with_the_system_language(self):
         cfg = config.load(self.path)
         self.assertEqual(cfg.language, "en")

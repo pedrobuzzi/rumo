@@ -18,6 +18,8 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
+import time
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -238,13 +240,29 @@ def load_state(config_path: Path) -> dict:
 
 
 def update_state(config_path: Path, **changes: object) -> None:
-    """Merge `changes` into state.json. Never fails: remembering is a convenience."""
+    """Merge `changes` into state.json. Never fails: remembering is a convenience.
+
+    The hooks of several sessions and the TUI write it at once, so the new file replaces the old one
+    whole: a reader that caught it half written would write back only its own keys.
+    """
+    path = state_path(config_path)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     try:
-        path = state_path(config_path)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(load_state(config_path) | changes) + "\n", encoding="utf-8")
+        tmp.write_text(json.dumps(load_state(config_path) | changes) + "\n", encoding="utf-8")
+        for attempt in range(5):
+            try:
+                os.replace(tmp, path)
+                break
+            except PermissionError:  # Windows: someone is reading it right now
+                if attempt == 4:
+                    raise
+                time.sleep(0.02)
     except OSError:
-        pass
+        try:
+            tmp.unlink(missing_ok=True)
+        except OSError:
+            pass
 
 
 def toml_str(value: str) -> str:

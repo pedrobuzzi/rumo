@@ -535,10 +535,15 @@ class RumoApp(App):
         if self.gh is None:
             return
         state = config.load_state(self.config_path)
+        asked: dict = {}  # each repository and branch once per check
         for item in items.list_items(self.cfg.folder):
-            if item.status != "done":
-                key = str(item.path)
-                prs.refresh(item, prs.noted_branches(state, key), prs.dropped(state, key), self.gh)
+            if item.status == "done":
+                continue
+            key = str(item.path)
+            try:
+                prs.refresh(item, prs.noted_branches(state, key), prs.dropped(state, key), self.gh, asked)
+            except Exception:  # one odd item must not stop the others
+                continue
 
     # ---------- data ----------
 

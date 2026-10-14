@@ -15,13 +15,14 @@ import re
 import shutil
 import subprocess
 from collections.abc import Callable
+from datetime import date, timedelta
 from pathlib import Path
 
 from rumo import config, items
 
 Run = Callable[[list[str], "str | None"], "str | None"]  # gh's arguments and folder -> its output, None on failure
 FIELDS = "url,state,isDraft,title"
-DEFAULT_BRANCHES = {"main", "master"}  # where work starts, not a PR's branch
+SHARED_BRANCHES = {"main", "master", "develop", "dev", "trunk"}  # where work starts or meets, not a PR's own branch
 NOTED_BRANCHES = 10  # per item
 NOTED_ITEMS = 200
 
@@ -34,7 +35,7 @@ def gh() -> Run | None:
 
     def run(args: list[str], folder: str | None) -> str | None:
         try:
-            done = subprocess.run([path, *args], cwd=folder, capture_output=True, text=True, encoding="utf-8", timeout=30)
+            done = subprocess.run([path, *args], cwd=folder, capture_output=True, text=True, encoding="utf-8", timeout=15)
         except (OSError, subprocess.TimeoutExpired):
             return None
         return done.stdout if done.returncode == 0 else None
@@ -42,49 +43,81 @@ def gh() -> Run | None:
     return run
 
 
-def refresh(item: items.Item, noted: list, dropped: set[str], run: Run) -> bool:
-    """Bring the item's PRs in line with what gh knows; True if the file changed."""
-    return apply(item, check(item, noted, run), dropped)
+Found = dict[str, tuple[str, str, str]]  # link -> (state, title, created at)
 
 
-def check(item: items.Item, noted: list, run: Run) -> dict[str, tuple[str, str]]:
+def refresh(item: items.Item, noted: list, dropped: set[str], run: Run, asked: dict | None = None) -> bool:
+    """Bring the item's PRs in line with what gh knows; True if the file changed.
+
+    `asked` keeps gh's answer per repository and branch, so that items sharing one ask once per check.
+    """
+    return apply(item, check(item, noted, run, asked), dropped)
+
+
+def check(item: items.Item, noted: list, run: Run, asked: dict | None = None) -> dict[str, tuple[str, str]]:
     """What gh says, {link: (state, title)}: the PRs of the item's branches, then each other open GitHub PR."""
+    asked = {} if asked is None else asked
+    since = _since(item)
     found: dict[str, tuple[str, str]] = {}
     for folder, branch in branches(item, noted):
-        if os.path.isdir(folder):
-            found |= _read(run(["pr", "list", "--head", branch, "--state", "all", "--json", FIELDS, "--limit", "20"], folder))
+        if not os.path.isdir(folder):
+            continue
+        key = (_repository(folder), branch)
+        if key not in asked:
+            asked[key] = _read(run(["pr", "list", "--head", branch, "--state", "all", "--json", f"{FIELDS},createdAt",
+                                    "--limit", "20"], key[0]))
+        # A branch name used again later is not this item's: only PRs opened since the item began count.
+        found |= {link: (state, title) for link, (state, title, created) in asked[key].items() if not created or created[:10] >= since}
     for pr in item.prs:
         link = items.pr_link(pr.url) or pr.url
         if link not in found and not pr.finished and re.search(r"/pull/\d+$", link) and "bitbucket.org" not in link:
-            found |= _read(run(["pr", "view", link, "--json", FIELDS], None))
+            found |= {link: (state, title) for link, (state, title, _) in _read(run(["pr", "view", link, "--json", FIELDS], None)).items()}
     return found
 
 
 def apply(item: items.Item, found: dict[str, tuple[str, str]], dropped: set[str]) -> bool:
-    """Write the states gh reported, fill missing titles and add new PRs (never one the user deleted)."""
+    """Write the states gh reported, fill missing titles and add new PRs (never one the user deleted).
+
+    `updated` stays as it was: gh learned something, nobody worked on the item.
+    """
     changed = False
     for link, (state, title) in found.items():
-        current = items.load(item.path)  # every write checks the file it read
-        pr = next((p for p in current.prs if items.pr_link(p.url) == link), None)
         try:
+            current = items.load(item.path)  # every write checks the file it read
+            pr = next((p for p in current.prs if items.pr_link(p.url) == link), None)
             if pr is None and link not in dropped:
-                changed |= items.add_pr(current, link, state, title)
+                changed |= items.add_pr(current, link, state, title, touch=False)
             elif pr is not None and ((state and state != pr.state) or (title and not pr.title)):
-                items.update_pr(current, pr, state=state or pr.state, title=pr.title or title)
+                items.update_pr(current, pr, state=state or pr.state, title=pr.title or title, touch=False)
                 changed = True
-        except items.WriteConflict:
-            break  # changed meanwhile: the next check picks it up
+        except (items.WriteConflict, OSError):
+            break  # changed, moved or deleted meanwhile: the next check picks it up
     return changed
 
 
 def branches(item: items.Item, noted: list) -> list[tuple[str, str]]:
-    """The (folder, branch) pairs the item's work happened on, without the default branches."""
+    """The (folder, branch) pairs the item's work happened on, without the shared branches."""
     found = [(s.folder, m[1]) for s in item.sessions if (m := re.search(r"\(([^)]*)\)\s*$", s.repo))]
     found += [(str(n[0]), str(n[1])) for n in noted if isinstance(n, list) and len(n) == 2]
-    return [p for p in dict.fromkeys(found) if p[1] not in DEFAULT_BRANCHES and p[1] not in ("", "-", "HEAD")]
+    return [p for p in dict.fromkeys(found) if p[1] not in SHARED_BRANCHES and p[1] not in ("", "-", "HEAD")]
 
 
-def _read(output: str | None) -> dict[str, tuple[str, str]]:
+def _since(item: items.Item) -> str:
+    """The day before the item began (its creation or first session; a day early for time zones), or ""."""
+    days = [d[:10] for d in [item.meta.get("created", ""), *(s.when for s in item.sessions)] if re.match(r"\d{4}-\d\d-\d\d", d)]
+    try:
+        return (date.fromisoformat(min(days)) - timedelta(days=1)).isoformat() if days else ""
+    except ValueError:
+        return ""
+
+
+def _repository(folder: str) -> str:
+    """The repository holding the folder, so a subfolder and the root ask gh once; the folder outside one."""
+    start = Path(os.path.abspath(folder))
+    return str(next((f for f in (start, *start.parents) if (f / ".git").exists()), start))
+
+
+def _read(output: str | None) -> Found:
     try:
         data = json.loads(output or "")
     except ValueError:
@@ -92,7 +125,7 @@ def _read(output: str | None) -> dict[str, tuple[str, str]]:
     found = {}
     for entry in data if isinstance(data, list) else [data]:
         if isinstance(entry, dict) and (link := items.pr_link(str(entry.get("url", "")))):
-            found[link] = (_state(entry), " ".join(str(entry.get("title") or "").split()))
+            found[link] = (_state(entry), " ".join(str(entry.get("title") or "").split()), str(entry.get("createdAt") or ""))
     return found
 
 
@@ -126,7 +159,7 @@ def branch_at(folder: Path | str) -> tuple[str, str] | None:
 def note_branch(config_path: Path, item_paths: list[str], folder: Path | str) -> None:
     """Remember that these items' work happened on the folder's branch."""
     at = branch_at(folder)
-    if at is None or at[1] in DEFAULT_BRANCHES or not item_paths:
+    if at is None or at[1] in SHARED_BRANCHES or not item_paths:
         return
     noted = config.load_state(config_path).get("pr_branches")
     noted = noted if isinstance(noted, dict) else {}
