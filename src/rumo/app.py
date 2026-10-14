@@ -14,6 +14,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from rich.cells import cell_len
+from rich.style import Style
 from rich.table import Table
 from rich.text import Text
 from textual.app import App, ComposeResult
@@ -23,7 +24,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListItem, ListView, Markdown, OptionList, SelectionList, Static
 from textual.widgets.option_list import Option
 
-from rumo import config, items
+from rumo import config, items, prs
 from rumo.items import Item, WriteConflict
 
 # Color only ever means the group, so a status is a shape: full when active, empty when not started.
@@ -56,13 +57,20 @@ def key_line(keys: list[tuple[str, str]], width: int = 0) -> Text:
 
 KEYS = [
     ("v", "view"), ("h", "now/later/past"), ("s", "status"), ("g", "group"), ("t", "tags"), ("n", "new idea"),
-    ("a", "add step"), ("tab", "steps"), ("x", "hide done"), ("e", "edit"), ("c", "copy resume"), ("/", "filter"),
-    ("q", "quit"),
+    ("a", "add step"), ("p", "add PR"), ("tab", "steps"), ("x", "hide done"), ("e", "edit"), ("c", "copy resume"),
+    ("/", "filter"), ("q", "quit"),
 ]
 STEP_KEYS = [  # while the Steps list has focus
     ("a", "add"), ("enter", "edit"), ("shift+↑↓", "move"), ("d", "delete"), ("space", "check"),
     ("x", "hide done"), ("esc", "back"),
 ]
+PR_KEYS = [  # while the PRs list has focus
+    ("p", "add"), ("enter", "open"), ("space", "state"), ("e", "edit"), ("d", "delete"), ("esc", "back"),
+]
+# The detail pane is not the list, so here a color may mean a state: the ones forges use for PRs.
+PR_COLORS = {"open": config.PALETTE["green"], "draft": "dim", "merged": config.PALETTE["purple"],
+             "closed": config.PALETTE["red"], "": "dim"}
+PR_CHECK_SECONDS = 600  # how often gh is asked about the PRs while the TUI is open
 
 
 def status_text(status: str, label: str | None = None) -> Text:
@@ -345,6 +353,46 @@ class StepScreen(ModalScreen[tuple[str, str] | None]):
         self.dismiss((text, self.kind) if text else None)
 
 
+class PRScreen(ModalScreen[tuple[str, str, str] | None]):
+    """A PR's link, with an optional title after it, and its state: Tab switches the state, Enter saves."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "cancel"),
+        Binding("tab", "switch_state", "state", priority=True),
+    ]
+    def __init__(self, title: str, text: str = "", state: str = "open") -> None:
+        super().__init__()
+        self.title_text = title
+        self.text = text
+        # "" (unknown) is offered only to a PR that has no state yet, so that editing it keeps it so.
+        self.states = (*items.PR_STATES, "") if state == "" else items.PR_STATES
+        self.state = state if state in self.states else "open"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Label(self.title_text, classes="dialog-title")
+            yield Input(value=self.text, placeholder="https://github.com/org/repo/pull/12  optional title", select_on_focus=False)
+            yield Static(self.state_line(), id="state", classes="dialog-hint")
+
+    def state_line(self) -> Text:
+        text = Text("state  ", "dim")
+        for state in self.states:
+            name = state or "unknown"
+            text.append(f"[{name}]" if state == self.state else name, "bold" if state == self.state else "dim")
+            text.append("  ")
+        return text.append_text(Text.assemble("\n", ("tab", "bold"), (" switches  ", "dim"), ("enter", "bold"),
+                                              (" saves  ", "dim"), ("esc", "bold"), (" cancels", "dim")))
+
+    def action_switch_state(self) -> None:
+        self.state = self.states[(self.states.index(self.state) + 1) % len(self.states)]
+        self.query_one("#state", Static).update(self.state_line())
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        link, _, title = event.value.strip().partition(" ")
+        self.dismiss((link, " ".join(title.split()), self.state) if link else None)
+
+
 class KeyBar(Static):
     """The footer's keys, rewrapped to its width whenever the terminal changes size."""
 
@@ -368,10 +416,25 @@ class StepList(ListView):
     ]
 
     def on_focus(self) -> None:
-        self.app.show_keys(steps=True)
+        self.app.show_keys("steps")
 
     def on_blur(self) -> None:
-        self.app.show_keys(steps=False)
+        self.app.show_keys()
+
+
+class PRList(ListView):
+    BINDINGS = [
+        Binding("enter", "app.open_pr", "open PR"),
+        Binding("space", "app.next_pr_state", "PR state"),
+        Binding("e", "app.edit_pr", "edit PR"),
+        Binding("d", "app.delete_pr", "delete PR"),
+    ]
+
+    def on_focus(self) -> None:
+        self.app.show_keys("prs")
+
+    def on_blur(self) -> None:
+        self.app.show_keys()
 
 
 # ---------- app ----------
@@ -390,7 +453,7 @@ class RumoApp(App):
     #detail { border: round $secondary-darken-1; padding: 0 1; }
     #header { margin-bottom: 1; }
     .section { text-style: bold; color: $accent; margin-top: 1; }
-    #steps, #sessions { height: auto; }
+    #steps, #prs, #sessions { height: auto; }
     Markdown { margin: 0; padding: 0; }
     #legend, #keys { height: auto; padding: 0 1; }
     ModalScreen { align: center middle; }
@@ -411,6 +474,7 @@ class RumoApp(App):
         Binding("t", "tags", "tags"),
         Binding("n", "new_idea", "new idea"),
         Binding("a", "add_step", "add step"),
+        Binding("p", "add_pr", "add PR"),
         Binding("x", "toggle_done", "done steps"),
         Binding("e", "edit", "edit"),
         Binding("c", "copy_resume", "copy resume"),
@@ -418,8 +482,9 @@ class RumoApp(App):
         Binding("escape", "clear_filter", "clear filter", show=False),
     ]
 
-    def __init__(self, config_path: Path | None = None, today: date | None = None) -> None:
+    def __init__(self, config_path: Path | None = None, today: date | None = None, gh: prs.Run | None = None) -> None:
         super().__init__()
+        self.gh = gh  # asks GitHub about the PRs in the background; None leaves the states as written
         self.config_path = config_path or config.default_path()
         self.cfg = config.load(self.config_path)
         self.today = today
@@ -443,6 +508,8 @@ class RumoApp(App):
                 yield Markdown(id="body")
                 yield Label("Steps", classes="section", id="steps-title")
                 yield StepList(id="steps")
+                yield Label("PRs", classes="section", id="prs-title")
+                yield PRList(id="prs")
                 yield Label("Sessions  (c copies the resume command)", classes="section")
                 yield ListView(id="sessions")
         yield Static(id="legend")
@@ -453,9 +520,25 @@ class RumoApp(App):
         if not self.cfg.error:
             config.ensure_file(self.config_path, self.cfg.folder, self.cfg.language)
         self.reload()
-        self.show_keys(steps=False)
+        self.show_keys()
         self.query_one("#timeline", OptionList).focus()
         self.set_interval(2.0, self.check_changes)
+        if self.gh is not None:
+            self.check_prs()
+            self.set_interval(PR_CHECK_SECONDS, self.check_prs)
+
+    def check_prs(self) -> None:
+        self.run_worker(self.ask_about_prs, thread=True, exclusive=True, group="prs", exit_on_error=False)
+
+    def ask_about_prs(self) -> None:
+        """In a thread: bring the PRs of every item not done in line with gh; the file watcher shows the result."""
+        if self.gh is None:
+            return
+        state = config.load_state(self.config_path)
+        for item in items.list_items(self.cfg.folder):
+            if item.status != "done":
+                key = str(item.path)
+                prs.refresh(item, prs.noted_branches(state, key), prs.dropped(state, key), self.gh)
 
     # ---------- data ----------
 
@@ -640,6 +723,9 @@ class RumoApp(App):
         if label:
             grid.add_column(width=self.name_width + 2, no_wrap=True)
         grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
+        open_prs = sum(not p.finished for p in item.prs)
+        if open_prs:
+            grid.add_column(no_wrap=True)
         grid.add_column(width=6, no_wrap=True, justify="right")
         if item.status == "done":
             right = short_date(item.done_at)
@@ -647,9 +733,10 @@ class RumoApp(App):
             right = f"{sum(s.done for s in item.steps)}/{len(item.steps)}" if item.steps else ""
         symbol = Text(SHAPES[item.status], "" if item.status == "doing" else "dim")
         title = Text(display_title(item.title, group.name if group else ""))
-        grid.add_row(symbol, *([self.label(group)] if label else []), title, Text(right, "dim"))
+        pr_cells = [Text(plural(open_prs, "PR"), "dim")] if open_prs else []
+        grid.add_row(symbol, *([self.label(group)] if label else []), title, *pr_cells, Text(right, "dim"))
         if item.status != "done" and (step := item.next_step):
-            grid.add_row("", *([""] if label else []), Text(f"↳ {step.text}", "dim"), "")
+            grid.add_row("", *([""] if label else []), Text(f"↳ {step.text}", "dim"), *[""] * len(pr_cells), "")
         return grid
 
     def view_tabs(self) -> Text:
@@ -718,11 +805,15 @@ class RumoApp(App):
         header = self.query_one("#header", Static)
         body = self.query_one("#body", Markdown)
         steps = self.query_one("#steps", ListView)
+        pull_requests = self.query_one("#prs", ListView)
         sessions = self.query_one("#sessions", ListView)
-        step_index, session_index = steps.index, sessions.index
+        step_index, pr_index, session_index = steps.index, pull_requests.index, sessions.index
         steps.clear()
+        pull_requests.clear()
         sessions.clear()
         self.shown = []
+        has_prs = bool(item and item.prs)
+        pull_requests.display = self.query_one("#prs-title", Label).display = has_prs
         if item is None:
             self.query_one("#steps-title", Label).update("Steps")
             header.update(Text("Nothing selected.", "dim"))
@@ -753,6 +844,13 @@ class RumoApp(App):
             Text.assemble("Steps", (f"  {hidden} done hidden · x shows them", "dim") if hidden else "")
         )
         steps.extend(ListItem(Label(self.step_label(s))) for s in self.shown)
+        if has_prs:
+            guessed = self.gh is None and any(not p.finished and "/pull/" in p.url for p in item.prs)
+            self.query_one("#prs-title", Label).update(Text.assemble(
+                "PRs", ("  (enter opens" + (" · no gh: states as written" if guessed else " the link") + ")", "dim")
+            ))
+            pull_requests.extend(ListItem(Label(self.pr_label(p))) for p in item.prs)
+            self.highlight(pull_requests, pr_index or 0)
         sessions.extend(
             ListItem(Label(Text.assemble((s.when, "dim"), "  ", s.repo, "  ", (s.id[:8], "cyan"), (" closed" if s.closed else "", "dim"))))
             for s in reversed(item.sessions)
@@ -761,6 +859,15 @@ class RumoApp(App):
             self.select_step(step_index or 0)
         if item.sessions:
             sessions.index = min(session_index or 0, len(item.sessions) - 1)
+
+    @staticmethod
+    def pr_label(pr: items.PR) -> Text:
+        """`● web-app#12  Logout novo  open`, the name linked to the PR."""
+        color = PR_COLORS.get(pr.state, "dim")
+        return Text.assemble(
+            ("●" if pr.state else "?", color), " ", (pr.name, Style(link=pr.url)),
+            f"  {pr.title}" if pr.title else "", (f"  {pr.state or 'state unknown'}", color),
+        )
 
     @staticmethod
     def step_label(step: items.Step) -> Text:
@@ -802,13 +909,14 @@ class RumoApp(App):
         self.hide_done = not self.hide_done
         self.save_state()
         self.show_detail()
-        self.show_keys(steps=self.query_one("#steps", ListView).has_focus)
+        focus = "steps" if self.query_one("#steps", ListView).has_focus else "prs" if self.query_one("#prs", ListView).has_focus else ""
+        self.show_keys(focus)
 
-    def show_keys(self, steps: bool) -> None:
-        """The footer: the step keys while the Steps list has focus, and `x` saying what it does now."""
+    def show_keys(self, focus: str = "") -> None:
+        """The footer: the keys of the list that has focus ("steps", "prs"), and `x` saying what it does now."""
         done = ("x", "show done" if self.hide_done else "hide done")
-        keys = [done if key == "x" else (key, label) for key, label in (STEP_KEYS if steps else KEYS)]
-        self.query_one("#keys", KeyBar).show(keys)
+        shown = {"steps": STEP_KEYS, "prs": PR_KEYS}.get(focus, KEYS)
+        self.query_one("#keys", KeyBar).show([done if key == "x" else (key, label) for key, label in shown])
 
     def action_toggle_step(self) -> None:
         item = self.current_item()
@@ -827,17 +935,19 @@ class RumoApp(App):
         return item, steps.index
 
     def select_step(self, index: int) -> None:
-        if not self.shown:
-            return
-        steps = self.query_one("#steps", ListView)
-        steps.index = max(0, min(index, len(self.shown) - 1))
+        if self.shown:
+            self.highlight(self.query_one("#steps", ListView), index)
+
+    @staticmethod
+    def highlight(rows: ListView, index: int) -> None:
+        rows.index = max(0, min(index, len(rows.children) - 1))
 
         # Right after a rebuild the highlight lands on a row about to be removed: draw it again after.
-        def highlight() -> None:
-            for n, row in enumerate(steps.query(ListItem)):
-                row.highlighted = n == steps.index
+        def draw() -> None:
+            for n, row in enumerate(rows.query(ListItem)):
+                row.highlighted = n == rows.index
 
-        steps.call_after_refresh(highlight)
+        rows.call_after_refresh(draw)
 
     def action_add_step(self) -> None:
         """Below the highlighted step while the Steps list has focus, else after the open steps."""
@@ -894,6 +1004,72 @@ class RumoApp(App):
 
         choices = [("delete", Text("delete step", "bold")), ("cancel", Text("cancel"))]
         self.push_screen(ChoiceScreen(f"Delete the step “{step.text}”?", choices), confirmed)
+
+    def focused_pr(self) -> tuple[Item, items.PR] | None:
+        item = self.current_item()
+        rows = self.query_one("#prs", ListView)
+        if item is None or not rows.has_focus or rows.index is None or rows.index >= len(item.prs):
+            return None
+        return item, item.prs[rows.index]
+
+    def action_add_pr(self) -> None:
+        item = self.current_item()
+        if item is None:
+            return
+
+        def added(answer: tuple[str, str, str] | None) -> None:
+            if not answer:
+                return
+            link, title, state = answer
+            if items.pr_link(link) is None:
+                self.notify(f"Not a link: {link}", severity="warning")
+            elif any(items.pr_link(p.url) == items.pr_link(link) for p in item.prs):
+                self.notify("This PR is already there.", severity="warning")
+            else:
+                self.write(lambda: items.add_pr(item, link, state, title))
+
+        self.push_screen(PRScreen(f"New PR in “{item.title}”"), added)
+
+    def action_open_pr(self) -> None:
+        if focused := self.focused_pr():
+            self.open_url(focused[1].url)
+
+    def action_next_pr_state(self) -> None:
+        if (focused := self.focused_pr()) is None:
+            return
+        item, pr = focused
+        states = items.PR_STATES
+        following = states[(states.index(pr.state) + 1) % len(states)] if pr.state in states else states[0]
+        self.write(lambda: items.update_pr(item, pr, state=following))
+
+    def action_edit_pr(self) -> None:
+        if (focused := self.focused_pr()) is None:
+            return
+        item, pr = focused
+
+        def edited(answer: tuple[str, str, str] | None) -> None:
+            if not answer:
+                return
+            link, title, state = answer
+            if items.pr_link(link) is None:
+                self.notify(f"Not a link: {link}", severity="warning")
+            elif (link, title, state) != (pr.url, pr.title, pr.state):
+                self.write(lambda: items.update_pr(item, pr, state=state, title=title, url=link))
+
+        self.push_screen(PRScreen("Edit PR", f"{pr.url} {pr.title}".strip(), pr.state), edited)
+
+    def action_delete_pr(self) -> None:
+        if (focused := self.focused_pr()) is None:
+            return
+        item, pr = focused
+
+        def confirmed(answer: str | None) -> None:
+            if answer == "delete":
+                prs.drop(self.config_path, str(item.path), pr.url)  # so that gh never adds it back
+                self.write(lambda: items.delete_pr(item, pr))
+
+        choices = [("delete", Text("delete PR", "bold")), ("cancel", Text("cancel"))]
+        self.push_screen(ChoiceScreen(f"Delete {pr.name} from this item?", choices), confirmed)
 
     def action_status(self) -> None:
         item = self.current_item()

@@ -377,5 +377,95 @@ class ConfigTest(unittest.TestCase):
         self.assertIsNotNone(cfg.error)
 
 
+
+PR_ITEM = """---
+title: Checkout novo
+status: doing
+updated: 2026-10-11 16:30
+---
+
+## Steps
+- [ ] [agent] Testar o checkout
+
+## PRs
+- [open] https://github.com/acme/web-app/pull/12 Checkout novo
+- [merged] https://gitlab.com/acme/pay/api/-/merge_requests/34
+- https://bitbucket.org/acme/infra/pull-requests/5 Infra
+
+## Sessions
+- 2026-10-11 10:08 | web-app (feature/checkout) | abc-123 | /Users/x/repo/web-app
+"""
+
+
+class PullRequestsTest(unittest.TestCase):
+    def setUp(self):
+        self.folder = Path(tempfile.mkdtemp())
+        self.path = write(self.folder, "checkout.md", PR_ITEM)
+
+    def prs(self) -> list[tuple[str, str, str, str]]:
+        return [(p.state, p.name, p.url, p.title) for p in items.load(self.path).prs]
+
+    def test_reads_each_pr_with_its_state_short_name_and_title(self):
+        self.assertEqual(self.prs(), [
+            ("open", "web-app#12", "https://github.com/acme/web-app/pull/12", "Checkout novo"),
+            ("merged", "api!34", "https://gitlab.com/acme/pay/api/-/merge_requests/34", ""),
+            ("", "infra#5", "https://bitbucket.org/acme/infra/pull-requests/5", "Infra"),
+        ])
+        self.assertEqual([p.finished for p in items.load(self.path).prs], [False, True, False])
+
+    def test_finds_pr_links_in_any_text_once_each(self):
+        text = (
+            "Created https://github.com/acme/web-app/pull/12/files and https://github.com/acme/web-app/pull/12.\n"
+            "View merge request: https://gitlab.com/acme/pay/api/-/merge_requests/34?tab=diffs\n"
+            "Open one at https://github.com/acme/web-app/pull/new/feature and see https://github.com/acme/web-app/issues/3"
+        )
+        self.assertEqual(items.pr_links(text), [
+            "https://github.com/acme/web-app/pull/12", "https://gitlab.com/acme/pay/api/-/merge_requests/34",
+        ])
+
+    def test_adds_a_pr_once_at_the_end_of_the_section(self):
+        self.assertTrue(items.add_pr(items.load(self.path), "https://github.com/acme/web-app/pull/13#top", "draft", "Frete"))
+        self.assertFalse(items.add_pr(items.load(self.path), "https://github.com/acme/web-app/pull/12/commits"))
+        self.assertEqual(self.prs()[-1], ("draft", "web-app#13", "https://github.com/acme/web-app/pull/13", "Frete"))
+        self.assertEqual(len(self.prs()), 4)
+        self.assertIn("- [draft] https://github.com/acme/web-app/pull/13 Frete\n\n## Sessions", self.path.read_text())
+
+    def test_adds_the_prs_section_before_sessions_or_at_the_end(self):
+        path = write(self.folder, "a.md", "---\ntitle: A\n---\n\n## Steps\n- [ ] [agent] X\n\n## Sessions\n- s\n")
+        items.add_pr(items.load(path), "https://github.com/acme/a/pull/1", "open")
+        self.assertIn("- [ ] [agent] X\n\n## PRs\n- [open] https://github.com/acme/a/pull/1\n\n## Sessions", path.read_text())
+        path = write(self.folder, "b.md", "---\ntitle: B\n---\n\n## Steps\n- [ ] [agent] X\n")
+        items.add_pr(items.load(path), "https://github.com/acme/b/pull/2")
+        self.assertTrue(path.read_text().endswith("- [ ] [agent] X\n\n## PRs\n- https://github.com/acme/b/pull/2\n"))
+
+    def test_any_link_can_be_added_but_not_other_text(self):
+        items.add_pr(items.load(self.path), "https://review.example.com/c/123", "open")
+        self.assertEqual(self.prs()[-1][1:3], ("review.example.com/c/123", "https://review.example.com/c/123"))
+        with self.assertRaises(ValueError):
+            items.add_pr(items.load(self.path), "not a link")
+        with self.assertRaises(ValueError):
+            items.add_pr(items.load(self.path), "https://github.com/acme/web-app/pull/14", "shipped")
+
+    def test_changes_the_state_and_title_and_deletes_a_pr(self):
+        pr = items.load(self.path).prs[0]
+        items.update_pr(items.load(self.path), pr, state="merged")
+        self.assertEqual(self.prs()[0][0::3], ("merged", "Checkout novo"))
+        items.update_pr(items.load(self.path), items.load(self.path).prs[2], title="Infra nova", state="")
+        self.assertEqual(self.prs()[2][0::3], ("", "Infra nova"))
+        items.delete_pr(items.load(self.path), items.load(self.path).prs[1])
+        self.assertEqual([p[1] for p in self.prs()], ["web-app#12", "infra#5"])
+        items.update_pr(items.load(self.path), items.load(self.path).prs[0], url="https://github.com/acme/web-app/pull/21/files")
+        self.assertEqual(self.prs()[0], ("merged", "web-app#21", "https://github.com/acme/web-app/pull/21", "Checkout novo"))
+        with self.assertRaises(ValueError):
+            items.update_pr(items.load(self.path), items.load(self.path).prs[0], url="nada")
+
+    def test_pr_edits_refuse_when_the_line_changed(self):
+        item = items.load(self.path)
+        self.path.write_text(PR_ITEM.replace("pull/12", "pull/99"), encoding="utf-8")
+        os.utime(self.path, (item.mtime, item.mtime))
+        with self.assertRaises(items.WriteConflict):
+            items.update_pr(item, item.prs[0], state="closed")
+
+
 if __name__ == "__main__":
     unittest.main()

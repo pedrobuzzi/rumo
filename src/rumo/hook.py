@@ -12,6 +12,8 @@ The plugin sends three events to `rumo hook`:
 - Stop: at the end of a turn that did work, check that it reached the items. A linked session
   whose items did not change gets one more nudge. A session without items that edited files is
   asked once whether to track it (see `untracked`). Either way, note the steps the agent has seen.
+  In a linked session, a PR the turn opened goes into the item (see `opened_prs`), and the branch
+  is noted, so the TUI can find the PRs opened from it later (`rumo.prs`).
 
 The messages carry the rules, so they reach the agent exactly when they matter and nothing has to be
 added to the user's global instructions. Runs on every prompt and every stop: stdlib only, UTF-8
@@ -29,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
 
-from rumo import config, items
+from rumo import config, items, prs
 
 RULES = (
     "Steps are what matters. Before you finish this response, if any work happened, edit the item it "
@@ -46,8 +48,10 @@ RULES = (
     "checked and the user's confirmation. When you check off the step you were working on and the item "
     "still has open steps, end your response with one line in the user's language naming the next one: for "
     "an `[agent]` step offer to start it (\"Next in rumo: <step>. Want me to start?\"), for a `[manual]` step "
-    "say it is theirs (\"Next in rumo (yours): <step>.\"). To stop updating from this session, append "
-    "`| closed` to its line in Sessions."
+    "say it is theirs (\"Next in rumo (yours): <step>.\"). PRs of this work go under `## PRs`, one per line: "
+    "`- [open] <link> <short title>` (states: open, draft, merged, closed). rumo adds the PRs it finds; add one "
+    "the user gives you, and update a state when you learn it (for example with `gh pr view <link>`). To stop "
+    "updating from this session, append `| closed` to its line in Sessions."
 )
 SHOWN_STEPS = 3
 SHOWN_ITEMS = 3  # in progress in this repository, at session start
@@ -58,6 +62,11 @@ EDIT_TOOLS = {"Edit", "Write", "NotebookEdit"}  # an untracked session is worth 
 ASK_AGAIN_DAYS = 15  # after the user said not to be asked, remind them the option exists
 ASK_AGAIN_SESSIONS = 15
 REMEMBERED_SESSIONS = 200  # sessions already asked or counted, so each one is asked at most once
+
+# What opens a PR: its output names it (GitLab names an existing merge request after a push, too).
+PR_COMMANDS = re.compile(r"\b(?:gh\s+pr\s+create|glab\s+mr\s+create)\b")
+PUSH_COMMAND = re.compile(r"\bgit\s+push\b")
+PR_TOOLS = re.compile(r"create_(?:pull|merge)_request", re.IGNORECASE)  # e.g. mcp__github__create_pull_request
 
 # Shell commands that only look around: a turn that ran nothing else did no work to record.
 LOOK_COMMANDS = {
@@ -80,6 +89,12 @@ def open_steps(item: items.Item) -> str:
     return "Open steps: " + "; ".join(shown + ([f"(+{more} more)"] if more > 0 else [])) + "."
 
 
+def open_prs(item: items.Item) -> str:
+    """The PRs not merged or closed yet, so the agent keeps their states and asks before finishing."""
+    pending = [f"{p.name} ({p.state or 'state unknown'})" for p in item.prs if not p.finished]
+    return f" Open PRs: {'; '.join(pending)}." if pending else ""
+
+
 def how_to_create() -> str:
     """The agent cannot run the /rumo skill itself, but it can follow it when the plugin says where it is."""
     root = os.environ.get("CLAUDE_PLUGIN_ROOT")
@@ -100,7 +115,7 @@ def reminder(cfg: config.Config, session_id: str) -> str:
     seen = seen_steps(cfg, session_id)
     lines = []
     for item in linked:
-        lines.append(f"{item.path} (status: {item.status}). {open_steps(item)}")
+        lines.append(f"{item.path} (status: {item.status}). {open_steps(item)}{open_prs(item)}")
         if str(item.path) in seen and (changes := outside_changes(item, seen[str(item.path)])):
             lines.append(changes)
     if seen:  # only once the Stop hook keeps them: an older plugin without it would flag the agent's own edits
@@ -198,11 +213,14 @@ class Turn:
 
     started: datetime | None = None  # None: the prompt was not found
     tools: list[tuple[str, dict]] = field(default_factory=list)
+    outputs: list[str] = field(default_factory=list)  # what each tool returned, in the same order
 
 
 def last_turn(transcript: Path) -> Turn:
     """Read the transcript backwards up to the last prompt, collecting the tools used after it."""
     tools: list[tuple[str, dict]] = []
+    outputs: list[str] = []
+    results: dict[str, str] = {}  # read before their calls, since the file is read backwards
     for line in reverse_lines(transcript):
         try:
             entry = json.loads(line)
@@ -215,9 +233,20 @@ def last_turn(transcript: Path) -> Turn:
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     tool_input = block.get("input")
                     tools.append((str(block.get("name", "")), tool_input if isinstance(tool_input, dict) else {}))
+                    outputs.append(results.get(str(block.get("id")), ""))
         elif entry.get("type") == "user" and not entry.get("isMeta") and is_prompt(content):
-            return Turn(parse_time(entry.get("timestamp")), tools[::-1])
-    return Turn(None, tools[::-1])
+            return Turn(parse_time(entry.get("timestamp")), tools[::-1], outputs[::-1])
+        elif entry.get("type") == "user" and isinstance(content, list):
+            for block in content:
+                if isinstance(block, dict) and block.get("type") == "tool_result":
+                    results[str(block.get("tool_use_id"))] = text_of(block.get("content"))
+    return Turn(None, tools[::-1], outputs[::-1])
+
+
+def text_of(content: object) -> str:
+    if isinstance(content, list):
+        return "\n".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
+    return content if isinstance(content, str) else ""
 
 
 def is_prompt(content: object) -> bool:
@@ -267,19 +296,31 @@ def stop(cfg: config.Config, session_id: str, payload: dict) -> str:
     linked = linked_items(cfg, session_id)
     transcript = payload.get("transcript_path")
     turn = last_turn(Path(transcript)) if transcript else None
+    # Whether the agent changed an item, told before rumo adds a PR to one itself.
+    reached = turn is not None and any(changed_since(item.path, turn.started) for item in linked)
+    unplaced: list[str] = []
     if linked:
         # An item the agent did not edit in this turn keeps the steps it saw before, so a step the user
         # added meanwhile is still pointed out on the next prompt.
         edited = {str(Path(str(t)).resolve()) for name, i in (turn.tools if turn else []) if name in EDIT_TOOLS
                   if (t := i.get("file_path"))}
         remember_steps(cfg, session_id, linked, keep={str(i.path) for i in linked if str(i.path.resolve()) not in edited})
+        prs.note_branch(cfg.path, [str(i.path) for i in linked], str(payload.get("cwd") or os.getcwd()))
+        if turn is not None:
+            unplaced = add_opened_prs(linked, edited, turn)
     if payload.get("stop_hook_active") or turn is None:
         return ""  # a stop that comes from a nudge: never insist twice in a row
     if not linked:
         return untracked(cfg, session_id, turn)
+    if unplaced:
+        return (
+            f"rumo: this turn opened {', '.join(unplaced)}, and this session keeps several items updated. Add each "
+            "under `## PRs` of the item it belongs to (`- [open] <link> <short title>`), then end without any "
+            "further text."
+        )
     if not any(name in WORK_TOOLS and not only_looks(name, tool_input) for name, tool_input in turn.tools):
         return ""
-    if any(changed_since(item.path, turn.started) for item in linked):
+    if reached:
         return ""
     if asks_the_user(payload.get("last_assistant_message")):
         return ""  # the agent waits for an answer (maybe whether to track this); the next reminder follows up
@@ -291,6 +332,42 @@ def stop(cfg: config.Config, session_id: str, payload: dict) -> str:
         "track it, or nothing worth recording happened, change nothing. Either way, never repeat or summarize "
         "your previous answer, and end without any further text."
     )
+
+
+def opened_prs(turn: Turn) -> list[tuple[str, str]]:
+    """The PRs this turn opened, with their state: the first link in the output of `gh pr create`,
+    `glab mr create` or a tool that creates one, or of a `git push` (GitLab names the open merge request)."""
+    found: dict[str, str] = {}
+    for (name, tool_input), output in zip(turn.tools, turn.outputs):
+        command = str(tool_input.get("command", "")) if name == "Bash" else ""
+        if PR_COMMANDS.search(command):
+            state = "draft" if re.search(r"\s(?:--draft|-d)(?=\s|$)", command) else "open"
+        elif PR_TOOLS.search(name):
+            state = "draft" if tool_input.get("draft") is True else "open"
+        elif PUSH_COMMAND.search(command):
+            state = ""  # it exists, but the push does not say whether it is still open
+        else:
+            continue
+        if links := items.pr_links(output):
+            found.setdefault(links[0], state)
+    return list(found.items())
+
+
+def add_opened_prs(linked: list[items.Item], edited: set[str], turn: Turn) -> list[str]:
+    """Add the PRs the turn opened to the item they belong to; the ones that item is unclear for are returned."""
+    known = {items.pr_link(p.url) for item in linked for p in item.prs}
+    opened = [(link, state) for link, state in opened_prs(turn) if link not in known]
+    if not opened:
+        return []
+    targets = linked if len(linked) == 1 else [i for i in linked if str(i.path.resolve()) in edited]
+    if len(targets) != 1:
+        return [link for link, _ in opened]
+    for link, state in opened:
+        try:
+            items.add_pr(items.load(targets[0].path), link, state)
+        except (items.WriteConflict, OSError):
+            return [link for link, _ in opened]
+    return []
 
 
 def only_looks(name: str, tool_input: dict) -> bool:

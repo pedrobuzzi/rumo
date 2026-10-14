@@ -8,6 +8,8 @@ import unittest
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
+from rumo import items
+
 ITEM = """---
 title: Migração do logout
 status: waiting
@@ -84,6 +86,11 @@ def tool(name: str, **tool_input) -> dict:
     return {"type": "tool_use", "id": "toolu_x", "name": name, "input": tool_input}
 
 
+def ran(call: dict, output: str) -> dict:
+    """A tool call and what it returned."""
+    return {**call, "_output": output}
+
+
 class StopHookTest(unittest.TestCase):
     """At the end of each turn: work must reach the linked items, and untracked work may be offered to rumo."""
 
@@ -113,15 +120,18 @@ class StopHookTest(unittest.TestCase):
         ]
         for i, t in enumerate(tools, 1):
             at = PROMPT_TIME + timedelta(seconds=i)
-            lines.append(entry("assistant", [{"type": "text", "text": "ok"}, t], at))
-            lines.append(entry("user", [{"type": "tool_result", "tool_use_id": "toolu_x", "content": "ok"}], at))
+            call = {k: v for k, v in t.items() if k != "_output"} | {"id": f"toolu_{i}"}
+            output = [{"type": "text", "text": t.get("_output", "ok")}]
+            lines.append(entry("assistant", [{"type": "text", "text": "ok"}, call], at))
+            lines.append(entry("user", [{"type": "tool_result", "tool_use_id": f"toolu_{i}", "content": output}], at))
         path = self.root / f"transcript-{time.monotonic_ns()}.jsonl"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
         return path
 
-    def stop(self, session: str, *tools: dict, active: bool = False, said: str = "Pronto.") -> str:
+    def stop(self, session: str, *tools: dict, active: bool = False, said: str = "Pronto.", cwd: Path | None = None) -> str:
         payload = {"session_id": session, "hook_event_name": "Stop", "stop_hook_active": active,
-                   "transcript_path": str(self.transcript(*tools)), "last_assistant_message": said}
+                   "transcript_path": str(self.transcript(*tools)), "last_assistant_message": said,
+                   "cwd": str(cwd or self.root)}
         result = subprocess.run([sys.executable, "-m", "rumo.cli", "hook"], input=json.dumps(payload),
                                 capture_output=True, text=True, encoding="utf-8", env=self.env)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -361,6 +371,65 @@ class StopHookTest(unittest.TestCase):
         result = subprocess.run([sys.executable, "-m", "rumo.cli", "now"],
                                 capture_output=True, text=True, encoding="utf-8", env=self.env)
         self.assertEqual(result.stdout, "Nothing in progress.\n")
+
+    # Pull requests
+
+    def prs(self, path: Path | None = None) -> list[str]:
+        return [f"{p.state} {p.name}".strip() for p in items.load(path or self.item).prs]
+
+    def test_a_pr_opened_in_the_turn_is_added_to_the_linked_item(self):
+        self.stop("open-session", ran(tool("Bash", command="git push -u origin feat && gh pr create --fill"),
+                                      "Creating pull request for feat into main\n\nhttps://github.com/acme/web-app/pull/12\n"))
+        self.stop("open-session", ran(tool("Bash", command="gh pr create -d -t x"), "https://github.com/acme/web-app/pull/13"))
+        self.stop("open-session", ran(tool("Bash", command="gh pr create --fill"), "https://github.com/acme/web-app/pull/12"))
+        self.assertEqual(self.prs(), ["open web-app#12", "draft web-app#13"])
+
+    def test_a_merge_request_gitlab_names_after_a_push_is_added_without_a_state(self):
+        self.stop("open-session", ran(tool("Bash", command="git push"),
+                                      "remote: View merge request for feat:\nremote:   https://gitlab.com/acme/api/-/merge_requests/34\n"))
+        self.assertEqual(self.prs(), ["api!34"])
+
+    def test_a_tool_that_creates_a_pr_counts_too(self):
+        output = '{"url": "https://api.github.com/repos/acme/web-app/pulls/9", "html_url": "https://github.com/acme/web-app/pull/9"}'
+        self.stop("open-session", ran(tool("mcp__github__create_pull_request", title="x", draft=True), output))
+        self.assertEqual(self.prs(), ["draft web-app#9"])
+
+    def test_a_pr_only_looked_at_is_not_added(self):
+        self.stop("open-session", ran(tool("Bash", command="gh pr view 3"), "https://github.com/acme/web-app/pull/3"),
+                  ran(tool("WebFetch", url="https://github.com/acme/web-app/pull/4"), "https://github.com/acme/web-app/pull/4"))
+        self.assertEqual(self.prs(), [])
+
+    def test_with_several_linked_items_the_pr_goes_to_the_one_edited_in_the_turn(self):
+        other = self.folder / "outro.md"
+        other.write_text("---\ntitle: Outro\nstatus: doing\n---\n\n## Sessions\n- 2026-10-11 10:08 | w (main) | open-session | /w\n", encoding="utf-8")
+        create = ran(tool("Bash", command="gh pr create --fill"), "https://github.com/acme/web-app/pull/12")
+        self.stop("open-session", tool("Edit", file_path=str(other)), create)
+        self.assertEqual((self.prs(), self.prs(other)), ([], ["open web-app#12"]))
+        message = self.stop("open-session", ran(tool("Bash", command="gh pr create"), "https://github.com/acme/web-app/pull/14"))
+        self.assertIn("https://github.com/acme/web-app/pull/14", message)
+        self.assertIn("## PRs", message)
+        self.assertEqual(self.prs(), [])
+        self.assertEqual(self.stop("open-session", ran(tool("Bash", command="gh pr create"), "https://github.com/acme/web-app/pull/15"),
+                                   active=True), "")  # never insist twice in a row
+
+    def test_adding_a_pr_still_asks_for_the_steps_when_the_agent_left_them(self):
+        message = self.stop("open-session", ran(tool("Bash", command="gh pr create"), "https://github.com/acme/web-app/pull/12"))
+        self.assertIn("no linked item changed", message)
+
+    def test_the_branch_of_each_turn_is_noted_for_the_linked_items(self):
+        repo = self.root / "web-app"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/feature/checkout\n", encoding="utf-8")
+        self.stop("open-session", tool("Read", file_path="/repo/a.py"), cwd=repo)
+        self.assertEqual(self.state()["pr_branches"], {str(self.item): [[str(repo), "feature/checkout"]]})
+
+    def test_the_prompt_names_the_prs_still_open(self):
+        self.edit_item("\n## Sessions", "\n## PRs\n- [open] https://github.com/acme/web-app/pull/12 Logout\n"
+                       "- [merged] https://github.com/acme/web-app/pull/3\n- https://gitlab.com/acme/api/-/merge_requests/34\n\n## Sessions")
+        reminder = self.prompt("open-session")
+        self.assertIn("Open PRs: web-app#12 (open); api!34 (state unknown).", reminder)
+        self.assertNotIn("web-app#3", reminder)
+        self.assertIn("## PRs", reminder)  # the rules say how to keep them
 
     def test_stays_silent_on_a_missing_or_broken_transcript(self):
         for transcript in ("/nowhere.jsonl", str(self.root)):

@@ -68,7 +68,7 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | Key | Action |
 |---|---|
 | ↑ ↓ | move through the list |
-| Tab | switch between the list, steps and sessions |
+| Tab | switch between the list, steps, PRs and sessions |
 | `v` | next view: Timeline, Projects, Repos (`1` `2` `3` go straight to one; rumo remembers it) |
 | `h` | next horizon: Now, then Later, then Past, then Now again |
 | `s` | change status (1-5 picks directly) |
@@ -79,6 +79,8 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | `a` | add a step to the selected item, after its open steps (below the highlighted one when the steps have focus); in the dialog, Tab switches `[agent]` and `[manual]` |
 | Enter, shift+↑ ↓, `d`, space | with the steps focused: edit, move, delete (asks first) or check the highlighted step; Esc goes back |
 | `x` | hide or show the done steps of every item (rumo remembers it) |
+| `p` | add a PR link to the selected item (a title may follow the link); in the dialog, Tab switches the state |
+| Enter, space, `e`, `d` | with the PRs focused: open the highlighted PR in the browser, change its state, edit it, or delete it (asks first) |
 | `c` | copy the command that resumes the selected agent session |
 | `/` | filter by title, tag, group or text (Esc clears) |
 | `q` | quit |
@@ -118,6 +120,14 @@ session is told which steps changed since its last answer, so it neither redoes 
 it starts none of them unless you ask. When the agent finishes a step and more remain, it ends with
 the next one: an offer to start it, or a note that it is yours.
 
+Each item lists its pull requests (GitHub, GitLab, Bitbucket or any other link) with their state:
+open, draft, merged or closed. rumo finds them on its own: a PR a linked session opens (with
+`gh pr create`, `glab mr create` or a tool that creates PRs) goes into its item at the end of the turn,
+and while the Timeline is open, the GitHub CLI (`gh`, when installed and logged in) keeps their states
+current and adds the PRs opened from the branches the item's sessions worked on. The agent updates a
+state when it learns one, and you can add, edit, open and delete PRs in the Timeline too; a PR you
+delete is never added back. The list shows how many PRs of each item are still open.
+
 In a session without an item, the agent learns at the start what is in progress in that repository
 (up to three items, with their next step), so it can answer "what is left?"; `rumo now` lists
 everything in progress. Once that session edits files, the agent asks whether to track it. The first
@@ -147,12 +157,17 @@ Users land on a protected page after logging out.
 - [ ] [manual] Ask for a PR review
 - [ ] [agent] e2e test for logout
 
+## PRs
+- [open] https://github.com/you/web-app/pull/42 Redirect home after logout
+
 ## Sessions
 - 2026-10-11 10:08 | web-app (main) | 7134aad0-4ba6-4583-9503-c08e98d28270 | /Users/you/repo/web-app
 ```
 
 - Statuses: `idea`, `doing`, `waiting`, `paused`, `done`. `done: <date>` is set when an item is finished.
 - Steps are `[agent]` (the AI can do it) or `[manual]` (you or someone else does it).
+- PRs are one link per line, with the state in brackets (`open`, `draft`, `merged`, `closed`; none when
+  unknown) and an optional title after the link.
 - An idea can be just the frontmatter; it grows when you start working on it.
 - A session line ending in `| closed` no longer updates the item.
 

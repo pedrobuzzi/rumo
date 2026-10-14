@@ -69,8 +69,8 @@ conversation so far.
 2. Otherwise create `<folder>/YYYY-MM-DD-<slug>.md` (today; slug from the title in kebab-case without
    accents; add `-2`, `-3` if taken) in the format below: `status: doing`, 1-3 tags from the allowed
    list, `group` only if one clearly fits, Steps (work already done here as `- [x]`, everything pending
-   as `- [ ]`, the next action first), a one-line Left off, a Context of at most 3 lines, and, in full
-   mode, `## Sessions` with the `session-line`.
+   as `- [ ]`, the next action first), a one-line Left off, a Context of at most 3 lines, the PRs
+   already opened for this work, and, in full mode, `## Sessions` with the `session-line`.
 3. **Suggest a group** (see "Groups").
 4. Confirm in one line: the path, then (full mode) "this session now keeps it updated until /clear,
    park or unlink", or (simple mode) "update it with /rumo or in the rumo app".
@@ -97,7 +97,8 @@ Search the folder's `*.md` files for the text, ignoring case (the Grep tool, or 
 only the matches. Answer with the items found (status, when done, what was decided).
 
 ### status
-Show the linked item's open steps (the first one is the next action) and its Left off.
+Show the linked item's open steps (the first one is the next action), its Left off and the PRs not
+merged or closed yet, with their state.
 
 ### step <text>
 Works in any session, linked or not.
@@ -120,7 +121,8 @@ Works in any session, linked or not.
 ### done
 In simple mode, ask which item to finish (from `rumo now`), since no item is linked.
 1. Before changing anything, ask in one message: for each unchecked step, whether it is done, dropped
-   (delete it) or stays (then the item is not finished); and whether to finish the item.
+   (delete it) or stays (then the item is not finished); for each PR not merged or closed, its state
+   now; and whether to finish the item.
 2. Only after an explicit yes: set `status: done`, add `done: <now>`, update `updated`, and (full mode)
    append ` | closed` to this session's line.
 
@@ -149,7 +151,10 @@ else stays short.
 - **Left off is one line**: where it stands or what blocks it. Not a copy of the next step.
 - **Context is at most 3 short lines**: what this is and why it matters. No history, logs, commands or
   list of what was done (the checked steps are that). A link to a longer document is fine.
-- Conversation-only replies need no update. Never add sections.
+- **PRs go under `## PRs`**, one per line: `- [open] <link> <short title>` (states: `open`, `draft`,
+  `merged`, `closed`). rumo adds the PRs a linked session opens and, with `gh`, the ones opened from
+  its branches. Add one the user gives you, and update a state when you learn it (`gh pr view <link>`).
+- Conversation-only replies need no update. Never add other sections.
 
 ## Several topics in one session
 
@@ -203,6 +208,9 @@ updated: 2026-10-11 16:30
 - [x] [agent] <done: one short line, starting with a verb>
 - [ ] [agent] <the next action>
 - [ ] [manual] <what the user or someone else does>
+
+## PRs
+- [open] https://github.com/acme/web-app/pull/42 <short title>
 
 ## Sessions
 - 2026-10-11 10:08 | web-app (main) | <session id> | /absolute/path

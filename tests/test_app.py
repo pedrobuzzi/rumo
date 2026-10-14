@@ -9,7 +9,7 @@ from rich.console import Console
 from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListItem, OptionList, Static
 
-from rumo import config, items
+from rumo import config, items, prs
 from rumo.app import GroupScreen, RumoApp
 
 TODAY = date(2026, 10, 11)
@@ -44,8 +44,8 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
         item(self.folder, "waiting-infra", "waiting", "2026-10-10 10:00")
         item(self.folder, "cache-idea", "idea", "2026-10-08 10:00")
 
-    def app(self) -> RumoApp:
-        return RumoApp(config_path=self.config, today=TODAY)
+    def app(self, gh=None) -> RumoApp:
+        return RumoApp(config_path=self.config, today=TODAY, gh=gh)
 
     @staticmethod
     def rows(app: RumoApp) -> list[str]:
@@ -578,6 +578,101 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             last = app.query_one("#steps").query(ListItem).last()
             self.assertGreater(detail.scroll_y, 0)
             self.assertTrue(detail.content_region.contains_region(last.region), (detail.content_region, last.region))
+
+    # ---------- pull requests ----------
+
+    def add_prs(self) -> None:
+        text = self.logout.read_text(encoding="utf-8")
+        self.logout.write_text(text + "\n## PRs\n- [open] https://github.com/acme/web-app/pull/12 Logout novo\n"
+                               "- [merged] https://github.com/acme/web-app/pull/3\n", encoding="utf-8")
+
+    def pr_lines(self) -> list[str]:
+        return [f"{p.state} {p.name} {p.title}".strip() for p in items.load(self.logout).prs]
+
+    def shown_prs(self, app: RumoApp) -> list[str]:
+        return [str(row.query_one(Label).render()) for row in app.query_one("#prs").query(ListItem)]
+
+    async def test_the_detail_lists_the_prs_with_their_state(self):
+        self.add_prs()
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(self.shown_prs(app), ["● web-app#12  Logout novo  open", "● web-app#3  merged"])
+            self.assertTrue(app.query_one("#prs").display)
+            await pilot.press("down")  # waiting-infra has none: the section goes away
+            await pilot.pause()
+            self.assertFalse(app.query_one("#prs").display)
+            self.assertFalse(app.query_one("#prs-title").display)
+
+    async def test_a_row_says_how_many_prs_are_still_open(self):
+        self.add_prs()
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertRegex(self.row_text(app, "item:logout").splitlines()[0], r"^● +Migração auth +logout +1 PR +1/2 *$")
+
+    async def test_p_adds_a_pr_and_tab_picks_its_state(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.press("p")
+            hint = str(app.screen.query_one("#state", Static).render())
+            self.assertIn("[open]", hint)
+            self.assertIn("tab", hint)
+            await pilot.press(*"https://github.com/acme/web-app/pull/12/files Logout novo", "tab", "enter")
+            await pilot.pause()
+            self.assertEqual(self.pr_lines(), ["draft web-app#12 Logout novo"])
+            await pilot.press("p", *"nada", "enter")
+            await pilot.pause()
+            self.assertEqual(len(self.pr_lines()), 1)
+
+    async def test_in_the_prs_enter_opens_space_changes_the_state_e_edits_and_d_deletes(self):
+        self.add_prs()
+        app = self.app()
+        opened = []
+        app.open_url = lambda url, **_: opened.append(url)
+        async with app.run_test() as pilot:
+            app.query_one("#prs").focus()
+            await pilot.press("enter")
+            self.assertEqual(opened, ["https://github.com/acme/web-app/pull/12"])
+            await pilot.press("space")
+            await pilot.pause()
+            self.assertEqual(self.pr_lines()[0], "draft web-app#12 Logout novo")
+            await pilot.press("e", *" do time", "enter")
+            await pilot.pause()
+            self.assertEqual(self.pr_lines()[0], "draft web-app#12 Logout novo do time")
+            await pilot.press("down", "d", "1")
+            await pilot.pause()
+            self.assertEqual(self.pr_lines(), ["draft web-app#12 Logout novo do time"])
+            # found again by gh, a deleted PR stays deleted
+            self.assertEqual(prs.dropped(config.load_state(self.config), str(self.logout)), {"https://github.com/acme/web-app/pull/3"})
+
+    async def test_the_footer_shows_the_pr_keys_while_the_prs_have_focus(self):
+        self.add_prs()
+        app = self.app()
+        async with app.run_test() as pilot:
+            keys = lambda: str(app.query_one("#keys", Static).render())
+            self.assertIn("p add PR", keys())
+            app.query_one("#prs").focus()
+            await pilot.pause()
+            self.assertIn("enter open", keys())
+            self.assertIn("space state", keys())
+            await pilot.press("escape")
+            await pilot.pause()
+            self.assertIn("tab steps", keys())
+
+    async def test_gh_keeps_the_states_current_in_the_background(self):
+        self.add_prs()
+
+        def gh(args, folder):
+            if args[:2] == ["pr", "view"] and args[2].endswith("/pull/12"):
+                return '{"url": "https://github.com/acme/web-app/pull/12", "state": "MERGED", "isDraft": false, "title": "x"}'
+            return None
+
+        app = self.app(gh=gh)
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            self.assertEqual(self.pr_lines()[0], "merged web-app#12 Logout novo")
 
     async def test_picks_up_changes_made_on_disk(self):
         app = self.app()

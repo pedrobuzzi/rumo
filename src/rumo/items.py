@@ -20,12 +20,16 @@ from pathlib import Path
 
 STATUSES = ("idea", "doing", "waiting", "paused", "done")
 KINDS = ("agent", "manual")  # who does a step: the agent, or the user (or someone else) outside it
+PR_STATES = ("open", "draft", "merged", "closed")  # a PR line without one: nobody has said yet
 
 TIME_FORMAT = "%Y-%m-%d %H:%M"
 PAST_WINDOW_DAYS = 14
 
 _STEP_RE = re.compile(r"^- \[( |x|X)\] (?:\[(agent|manual)\] )?(.*)$")
 _SECTION_RE = re.compile(r"^## (.+?)\s*$")
+_PR_RE = re.compile(r"^- (?:\[(open|draft|merged|closed)\] )?(https?://\S+)(?: +(.*))?$")
+# A pull or merge request on GitHub (or GitHub Enterprise), GitLab or Bitbucket: the link up to its number.
+_PR_LINK_RE = re.compile(r"https?://[\w.-]+(?::\d+)?/(?:[\w.-]+/)+(?:pull|-/merge_requests|pull-requests)/\d+")
 
 
 class WriteConflict(Exception):
@@ -42,6 +46,27 @@ class Step:
     @property
     def label(self) -> str:
         return (f"[{self.kind}] " if self.kind else "") + self.text
+
+
+@dataclass
+class PR:
+    state: str  # one of PR_STATES, or "" when unknown
+    url: str
+    title: str
+    line: int
+
+    @property
+    def name(self) -> str:
+        """`https://github.com/acme/web-app/pull/12` -> `web-app#12`; a GitLab merge request is `api!34`."""
+        if m := re.match(r"https?://[^/]+/(?:.+/)?([^/]+)/(?:pull|pull-requests)/(\d+)$", self.url):
+            return f"{m[1]}#{m[2]}"
+        if m := re.match(r"https?://[^/]+/(?:.+/)?([^/]+)/-/merge_requests/(\d+)$", self.url):
+            return f"{m[1]}!{m[2]}"
+        return re.sub(r"^https?://", "", self.url).rstrip("/")
+
+    @property
+    def finished(self) -> bool:
+        return self.state in ("merged", "closed")
 
 
 @dataclass
@@ -70,6 +95,7 @@ class Item:
     meta: dict[str, str]
     sections: dict[str, str]
     steps: list[Step] = field(default_factory=list)
+    prs: list[PR] = field(default_factory=list)
     sessions: list[Session] = field(default_factory=list)
 
     @property
@@ -114,6 +140,7 @@ def load(path: Path) -> Item:
 
     sections: dict[str, list[str]] = {}
     steps: list[Step] = []
+    prs: list[PR] = []
     sessions: list[Session] = []
     current = ""
     for i in range(body_start, len(lines)):
@@ -127,6 +154,8 @@ def load(path: Path) -> Item:
         sections[current].append(line)
         if current == "steps" and (m := _STEP_RE.match(line)):
             steps.append(Step(m.group(1) != " ", m.group(2) or "", m.group(3), i))
+        elif current == "prs" and (m := _PR_RE.match(line)):
+            prs.append(PR(m.group(1) or "", m.group(2), (m.group(3) or "").strip(), i))
         elif current == "sessions" and line.startswith("- "):
             parts = [p.strip() for p in line[2:].split("|")]
             if len(parts) >= 4:
@@ -139,6 +168,7 @@ def load(path: Path) -> Item:
         meta=meta,
         sections={k: "\n".join(v).strip() for k, v in sections.items()},
         steps=steps,
+        prs=prs,
         sessions=sessions,
     )
 
@@ -247,11 +277,7 @@ def add_step(item: Item, text: str, kind: str, after: Step | None = None, now: d
         if anchor:
             lines.insert(_step_at(item, lines, anchor, offset) + 1, line)
             return
-        headings = {
-            m.group(1).strip().lower(): i
-            for i in range(_frontmatter_end(lines)[0] + 1, len(lines))
-            if (m := _SECTION_RE.match(lines[i]))
-        }
+        headings = _headings(lines)
         if "steps" in headings:
             lines.insert(headings["steps"] + 1, line)
         elif "sessions" in headings:
@@ -286,6 +312,92 @@ def swap_steps(item: Item, step: Step, other: Step, now: datetime | None = None)
         lines[i], lines[j] = lines[j], lines[i]
 
     _save(item, edit, _stamp(now))
+
+
+def pr_link(url: str) -> str | None:
+    """The link to keep for a PR: a known host's PR up to its number (no `/files`, query or anchor),
+    any other web link as given, or None for anything that is not a link."""
+    url = url.strip()
+    if m := _PR_LINK_RE.match(url):
+        return m.group(0)
+    return url if re.fullmatch(r"https?://\S+", url) else None
+
+
+def pr_links(text: str) -> list[str]:
+    """The PRs a text links to (a command's output, a message), once each, in order."""
+    return list(dict.fromkeys(_PR_LINK_RE.findall(text)))
+
+
+def add_pr(item: Item, url: str, state: str = "", title: str = "", now: datetime | None = None) -> bool:
+    """Add a PR at the end of the PRs section (a new one before Sessions if none). False if already there."""
+    link = pr_link(url)
+    if link is None:
+        raise ValueError(f"not a link: {url}")
+    if any(pr_link(p.url) == link for p in item.prs):
+        return False
+    line = _pr_line(state, link, title)
+
+    def edit(lines: list[str], _: int) -> None:
+        headings = _headings(lines)
+        if "prs" in headings:
+            start = headings["prs"] + 1
+            end = next((i for i in range(start, len(lines)) if _SECTION_RE.match(lines[i])), len(lines))
+            last = next((i for i in range(end - 1, start - 1, -1) if lines[i].strip()), headings["prs"])
+            lines.insert(last + 1, line)
+        elif "sessions" in headings:
+            lines[headings["sessions"]:headings["sessions"]] = ["## PRs", line, ""]
+        else:
+            lines.extend(([""] if lines and lines[-1].strip() else []) + ["## PRs", line])
+
+    _save(item, edit, _stamp(now))
+    return True
+
+
+def update_pr(
+    item: Item, pr: PR, state: str | None = None, title: str | None = None, url: str | None = None,
+    now: datetime | None = None,
+) -> None:
+    link = pr.url if url is None else pr_link(url)
+    if link is None:
+        raise ValueError(f"not a link: {url}")
+    line = _pr_line(pr.state if state is None else state, link, pr.title if title is None else title)
+
+    def edit(lines: list[str], offset: int) -> None:
+        lines[_pr_at(item, lines, pr, offset)] = line
+
+    _save(item, edit, _stamp(now))
+
+
+def delete_pr(item: Item, pr: PR, now: datetime | None = None) -> None:
+    def edit(lines: list[str], offset: int) -> None:
+        del lines[_pr_at(item, lines, pr, offset)]
+
+    _save(item, edit, _stamp(now))
+
+
+def _pr_line(state: str, url: str, title: str) -> str:
+    if state and state not in PR_STATES:
+        raise ValueError(f"unknown PR state: {state}")
+    title = " ".join(title.split())
+    return "- " + (f"[{state}] " if state else "") + url + (f" {title}" if title else "")
+
+
+def _pr_at(item: Item, lines: list[str], pr: PR, offset: int) -> int:
+    """The PR's line index now, or WriteConflict when that line no longer holds the PR."""
+    i = pr.line + offset
+    m = _PR_RE.match(lines[i]) if i < len(lines) else None
+    if not m or m.group(2) != pr.url:
+        raise WriteConflict(item.path.name)
+    return i
+
+
+def _headings(lines: list[str]) -> dict[str, int]:
+    """Where each section starts: {lowercase name: line index}."""
+    return {
+        m.group(1).strip().lower(): i
+        for i in range(_frontmatter_end(lines)[0] + 1, len(lines))
+        if (m := _SECTION_RE.match(lines[i]))
+    }
 
 
 def _step_line(done: bool, kind: str, text: str) -> str:

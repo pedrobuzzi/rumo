@@ -25,9 +25,10 @@ def main(argv: list[str] | None = None) -> None:
 
     # Late imports: `rumo hook` runs on every prompt and must not pay for Textual.
     if command == "":
+        from rumo import prs
         from rumo.app import RumoApp
 
-        RumoApp().run()
+        RumoApp(gh=prs.gh()).run()
     elif command == "hook":
         from rumo.hook import main as hook
 
