@@ -105,6 +105,18 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertIn("● doing", legend)
             self.assertIn("◐ waiting", legend)
 
+    async def test_the_version_sits_quietly_at_the_end_of_the_legend(self):
+        from importlib.metadata import version
+
+        app = self.app()
+        async with app.run_test(size=(120, 30)) as pilot:
+            await pilot.pause()
+            shown = app.query_one("#version", Static)
+            self.assertEqual(str(shown.render()), f"rumo {version('rumo-cli')}")
+            legend = app.query_one("#legend", Static)
+            self.assertEqual(shown.region.y, legend.region.y)
+            self.assertEqual(shown.region.right, 120)  # flush with the right edge of the screen
+
     async def test_a_row_is_symbol_label_title_progress_and_next_step(self):
         item(self.folder, "pix", "doing", "2026-10-11 09:00", title="Pagamentos: Pix no checkout",
              extra="group: pagamentos\n", body="## Steps\n- [ ] [agent] Gerar o QR code\n")

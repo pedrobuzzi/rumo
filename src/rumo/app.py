@@ -11,6 +11,7 @@ import unicodedata
 from collections import Counter
 from collections.abc import Callable
 from datetime import date, datetime
+from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
 
 from rich.cells import cell_len
@@ -393,6 +394,13 @@ class PRScreen(ModalScreen[tuple[str, str, str] | None]):
         self.dismiss((link, " ".join(title.split()), self.state) if link else None)
 
 
+def app_version() -> str:
+    try:
+        return f"rumo {version('rumo-cli')}"
+    except PackageNotFoundError:  # run from a source tree that was never installed
+        return ""
+
+
 class KeyBar(Static):
     """The footer's keys, rewrapped to its width whenever the terminal changes size."""
 
@@ -455,7 +463,10 @@ class RumoApp(App):
     .section { text-style: bold; color: $accent; margin-top: 1; }
     #steps, #prs, #sessions { height: auto; }
     Markdown { margin: 0; padding: 0; }
+    #footer { height: auto; }
     #legend, #keys { height: auto; padding: 0 1; }
+    #legend { width: 1fr; }
+    #version { width: auto; padding: 0 1; color: $text-muted; }
     ModalScreen { align: center middle; }
     .dialog { width: 60; height: auto; max-height: 80%; border: round $primary; background: $surface; padding: 0 1; }
     .dialog-title { text-style: bold; margin-bottom: 1; }
@@ -512,7 +523,9 @@ class RumoApp(App):
                 yield PRList(id="prs")
                 yield Label("Sessions  (c copies the resume command)", classes="section")
                 yield ListView(id="sessions")
-        yield Static(id="legend")
+        with Horizontal(id="footer"):
+            yield Static(id="legend")
+            yield Static(app_version(), id="version")
         yield KeyBar(id="keys")
 
     def on_mount(self) -> None:
