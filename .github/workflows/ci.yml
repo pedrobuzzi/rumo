@@ -26,7 +26,13 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - name: Run tests
-        run: uv run python -m unittest discover -s tests -v
+        shell: bash
+        run: |
+          uv run python -m unittest discover -s tests -v 2>&1 | tee test.log || {
+            # Job logs need a GitHub login, annotations do not: name each failure and its error there.
+            grep -E "^(FAIL|ERROR): |^[A-Za-z.]*(Error|Exception): " test.log | head -40 | sed 's/^/::error::/'
+            exit 1
+          }
       - name: Smoke test the installed command
         shell: bash
         run: uv run bash scripts/smoke_test.sh "" "$(uv run python -c 'import sys; print(sys.executable)')"
