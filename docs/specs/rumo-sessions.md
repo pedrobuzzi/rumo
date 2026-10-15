@@ -31,7 +31,7 @@ one short plan, grouped by what happens to each item, and writes nothing until t
 
 ## Implementation Decisions
 
-### `rumo sessions [--since <N>d] [--reviewed <time>]`
+### `rumo sessions [--since <N>d|<N>h] [--reviewed <time>]`
 
 - Reads Claude Code's folder: `$CLAUDE_CONFIG_DIR`, else `~/.claude`. Transcripts are
   `projects/<folder>/<session id>.jsonl` (subagent transcripts, nested deeper, are not sessions). Open
@@ -43,14 +43,16 @@ one short plan, grouped by what happens to each item, and writes nothing until t
   or `--since`, which overrides both. An open session with nothing new since the cut was already
   reviewed and is left out.
 - Left out always: `entrypoint` other than `cli` (`claude -p`, the SDK), a folder inside a temporary
-  directory, fewer than 3 prompts from the user.
-- At most the 20 most recent sessions; the header says how many more there are.
+  directory, and quick questions: fewer than 3 prompts from the user, no file edited and fewer than 10
+  tool calls (one long prompt that kept the agent busy is work).
+- The 20 most recent sessions come whole; older ones come without prompts, last answer and edits,
+  so every session since the cut is in the review and the cut stays right. The header says how many.
 - Output, for the agent:
 
   ```
   # since: 2026-10-13 18:00   (last review)
   # now: 2026-10-15 09:12
-  # sessions: 6 (3 open), 2 more before these: widen with --since
+  # sessions: 6 (3 open)
   ## 8923bfe4-5344-40f6-9f14-3dfb73e95046  open
   - last: 2026-10-15 09:10 · started 2026-10-12 12:09
   - where: rumo (main) · /Users/x/repo/rumo
@@ -65,10 +67,14 @@ one short plan, grouped by what happens to each item, and writes nothing until t
   - line: - 2026-10-15 09:12 | rumo (main) | 8923bfe4-… | /Users/x/repo/rumo
   ```
 
-  Lines with nothing to say are omitted. Prompts are the user's own messages (no tool results), a slash
-  command shown as `/name args`, each cut to 200 characters; the last answer is the agent's last text,
-  cut to 400. `edited` lists the files written with Edit, Write and NotebookEdit, relative to the
-  session's folder, up to 8. `prs` uses the hook's own detection of opened PRs. `same branch` lists the
+  Lines with nothing to say are omitted. Prompts are what the person typed (`origin.kind` is `human`
+  when Claude Code records it; no tool results, notifications, skill text or compact summaries), a
+  slash command shown as `/name args` (Claude Code's own, like `/compact` or `/model`, left out), pasted
+  text as `[pasted text]`, each cut to 200 characters; the last answer is the agent's last text, cut to
+  400. `edited` lists the files written with Edit, Write and NotebookEdit, the latest first, up to 8,
+  relative to the repository the session was last in; the agent's own notes (its memory in Claude
+  Code's folder, scratchpad files in a temporary folder) and the items themselves are not work and are
+  left out. A branch Claude Code records as `HEAD` (outside a branch) shows as `-`. `prs` uses the hook's own detection of opened PRs. `same branch` lists the
   items not done whose session lines or noted branches (`pr_branches`) have the same repository and
   branch, shared branches (`main`, `master`, `develop`, `dev`, `trunk`) excluded. `line` is the session
   line ready to append: now, the repository and branch the session was last on, its id and the folder it
@@ -141,6 +147,11 @@ current from then on.
 - Sessions of other agents (Codex, Cursor) and of other computers.
 
 ## Further Notes
+
+- Found while trying it on real sessions (2026-10-15): the agent's memory and scratchpad files, item
+  files, `/compact` and a `HEAD` branch were noise; a single long prompt was real work; the skill's
+  allowed tools cover only the turn it was invoked in, so `rumo sessions --reviewed`, run after the
+  user's answer, may ask for approval (like `rumo group-add` after a yes).
 
 - Decided on 2026-10-15: Q1 the name `sessions`; Q2 open sessions plus those active since the last
   review (3 days the first time, `7d` widens); Q3 to Q8 as recommended (match order, the digest from the

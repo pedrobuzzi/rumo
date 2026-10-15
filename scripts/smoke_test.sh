@@ -25,6 +25,9 @@ export RUMO_DIR="$dir/items" RUMO_CONFIG="$dir/config.toml"
 
 rumo index | grep -q "^# folder: " || { echo "::error::rumo index printed no folder"; exit 1; }
 
+CLAUDE_CONFIG_DIR="$dir/no-claude" rumo sessions | grep -q "^No Claude Code sessions found" \
+  || { echo "::error::rumo sessions did not say there is no Claude Code folder"; exit 1; }
+
 hook_output="$(echo '{"session_id": "smoke-test"}' | rumo hook)"
 if [ -n "$hook_output" ]; then
   echo "::error::rumo hook spoke for an unlinked session: $hook_output"

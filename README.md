@@ -99,9 +99,18 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | `/rumo park [reason]` | Pause the item with an accurate "Left off" and stop updating it here. |
 | `/rumo done` | Finish the item (checks the steps, asks first). |
 | `/rumo unlink` | Stop updating the item from this session. |
+| `/rumo sessions [7d]` | Catch up on the sessions open or active since the last review: create or update their items. |
 
-`link`, `status`, `park` and `unlink` need Claude Code with the plugin, because they rely on
-its session id and hook. Other agents get the rest.
+`link`, `status`, `park`, `unlink` and `sessions` need Claude Code with the plugin, because they rely
+on its session id and hook. Other agents get the rest.
+
+`/rumo sessions` is for when you worked in several sessions without rumo. From any session, it reads
+what each recent Claude Code session did (where it ran, what you asked, what it edited, the PRs it
+opened) and matches it to an item: the one it is linked to, one that worked on the same branch, or one
+about the same subject, before proposing a new item. Quick questions are proposed as ignored. You see
+one short plan (update, link, create, ignore) and nothing is written until you say yes or adjust it.
+Each review starts where the last one ended (3 days back the first time); `/rumo sessions 7d` looks
+further back. Sessions run by scripts (`claude -p`) and in temporary folders are left out.
 
 When you create an item or an idea, the agent checks whether it belongs to an existing group. If
 other ungrouped items look like the same initiative, it suggests a new group (name and color) and

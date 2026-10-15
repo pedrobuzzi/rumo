@@ -62,7 +62,7 @@ def check(item: items.Item, noted: list, run: Run, asked: dict | None = None) ->
     for folder, branch in branches(item, noted):
         if not os.path.isdir(folder):
             continue
-        key = (_repository(folder), branch)
+        key = (repository(folder), branch)
         if key not in asked:
             asked[key] = _read(run(["pr", "list", "--head", branch, "--state", "all", "--json", f"{FIELDS},createdAt",
                                     "--limit", "20"], key[0]))
@@ -111,7 +111,7 @@ def _since(item: items.Item) -> str:
         return ""
 
 
-def _repository(folder: str) -> str:
+def repository(folder: str) -> str:
     """The repository holding the folder, so a subfolder and the root ask gh once; the folder outside one."""
     start = Path(os.path.abspath(folder))
     return str(next((f for f in (start, *start.parents) if (f / ".git").exists()), start))

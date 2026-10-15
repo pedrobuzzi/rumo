@@ -1,7 +1,7 @@
 """The `rumo` command: opens the Timeline.
 
 Other subcommands exist for the agent and the hook, and are kept out of
-the help on purpose: `hook`, `index`, `now`, `path`, `group-add`, `ask-to-track`, `--version`.
+the help on purpose: `hook`, `index`, `now`, `sessions`, `path`, `group-add`, `ask-to-track`, `--version`.
 `index` reads the session id itself: Claude Code refuses to run a command that expands a variable
 without asking, so the skill only ever runs `rumo ...`.
 """
@@ -46,6 +46,8 @@ def main(argv: list[str] | None = None) -> None:
         _index(args[1:])
     elif command == "now":
         _now()
+    elif command == "sessions":
+        _sessions(args[1:])
     elif command == "group-add":
         _group_add(args[1:])
     elif command == "ask-to-track":
@@ -103,6 +105,48 @@ def _now() -> None:
         print(f"{item.title} | {item.status} | next: {step.label if step else 'no open steps'} | {item.path}")
     if not in_progress:
         print("Nothing in progress.")
+
+
+def _sessions(rest: list[str]) -> None:
+    """`rumo sessions [--since <N>d|<N>h]`: the Claude Code sessions active since the last review (3 days
+    back the first time), digested for `/rumo sessions`. `rumo sessions --reviewed "<time>"` saves the
+    `# now:` of the listing that was reviewed as where the next review starts.
+    """
+    import re
+    from datetime import datetime, timedelta
+
+    from rumo import config, items, sessions
+
+    usage = 'usage: rumo sessions [--since <N>d] | rumo sessions --reviewed "<YYYY-MM-DD HH:MM>"'
+    cfg = config.load()
+    if rest[:1] == ["--reviewed"]:
+        when = " ".join(rest[1:]).replace("T", " ")
+        try:
+            datetime.strptime(when, items.TIME_FORMAT)
+        except ValueError:
+            print(usage, file=sys.stderr)
+            raise SystemExit(2) from None
+        config.update_state(cfg.path, sessions_reviewed_at=when)
+        return
+    now = datetime.now().replace(second=0, microsecond=0)
+    if rest[:1] == ["--since"] and len(rest) == 2 and (m := re.fullmatch(r"(\d+)([dh])", rest[1])):
+        since, why = now - timedelta(**{"days" if m[2] == "d" else "hours": int(m[1])}), f"--since {rest[1]}"
+    elif rest:
+        print(usage, file=sys.stderr)
+        raise SystemExit(2)
+    else:
+        try:
+            since, why = datetime.strptime(str(config.load_state(cfg.path).get("sessions_reviewed_at")), items.TIME_FORMAT), "the last review"
+        except ValueError:
+            since, why = now - timedelta(days=sessions.FIRST_REVIEW_DAYS), f"{sessions.FIRST_REVIEW_DAYS} days ago: the first review"
+    claude = sessions.claude_dir()
+    found = sessions.recent(claude, since)
+    if found is None:
+        print(f"No Claude Code sessions found in {claude}.")
+        return
+    print(f"# since: {since:%Y-%m-%d %H:%M} ({why})")
+    print(f"# now: {now:%Y-%m-%d %H:%M}")
+    print("\n".join(sessions.digest(found, items.list_items(cfg.folder), config.load_state(cfg.path), now, cfg.folder)))
 
 
 def _session_line(session: str, folder: str) -> str:

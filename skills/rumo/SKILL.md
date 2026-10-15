@@ -1,8 +1,8 @@
 ---
 name: rumo
-description: Organize the user's local work items (past, now, later) with rumo. Creates items from the session, notes ideas, links this session to an item, adds steps, parks or finishes it. Requires the rumo CLI.
+description: Organize the user's local work items (past, now, later) with rumo. Creates items from the session, notes ideas, links this session to an item, adds steps, parks or finishes it, and catches up on recent sessions. Requires the rumo CLI.
 disable-model-invocation: true
-argument-hint: "[new | idea <text> | link [item] | now | find <text> | status | step <text> | park [reason] | done | unlink]"
+argument-hint: "[new | idea <text> | link [item] | now | find <text> | status | step <text> | park [reason] | done | unlink | sessions [7d]]"
 allowed-tools: Bash(rumo:*)
 ---
 
@@ -26,8 +26,8 @@ there). Never read environment variables yourself; the index has what you need. 
 - `session-line`: the line that links this session to an item. Append it to the item's `## Sessions`.
   - **Full mode**: `session` is an id (Claude Code). Sessions can be linked and resumed.
   - **Simple mode**: `session: none` (another agent, or an old Claude Code). `new`, `idea`, `now`,
-    `find`, `step` and `done` work without a Sessions section; `link`, `status`, `park` and `unlink`
-    need Claude Code with the rumo plugin, so say so. The menu shows only `new`, `idea`, `now`, `find`.
+    `find`, `step` and `done` work without a Sessions section; `link`, `status`, `park`, `unlink` and
+    `sessions` need Claude Code with the rumo plugin, so say so. The menu shows only `new`, `idea`, `now`, `find`.
   - No `session` line: the CLI is older than the plugin. Work in simple mode and tell the user to
     upgrade it (`brew upgrade rumo`, `uv tool upgrade rumo-cli` or `pipx upgrade rumo-cli`).
 
@@ -50,6 +50,7 @@ conversation so far.
   3. `link [item]`: continue an existing item in this session
   4. `now`: list what is in progress, with the next step of each
   5. `find <text>`: search past, current and future items
+  6. `sessions`: catch up on the sessions open or recent, creating or updating their items
 - Session **linked** (name the item or items):
   1. `status`: show Left off and the next steps
   2. `step <text>`: add a step
@@ -57,6 +58,7 @@ conversation so far.
   4. `park [reason]`: pause it with an accurate Left off and stop updating it here
   5. `done`: finish it (checks the steps, asks you first)
   6. `unlink`: stop updating it from this session
+  7. `sessions`: catch up on the sessions open or recent, creating or updating their items
 
 ## 2. Subcommands
 
@@ -128,6 +130,52 @@ In simple mode, ask which item to finish (from `rumo now`), since no item is lin
 
 ### unlink
 Append ` | closed` to this session's line. Nothing else changes.
+
+### sessions [period]
+Catches up, from any session, on the Claude Code sessions open or active since the last review.
+1. Run `rumo sessions`, or `rumo sessions --since 7d` when the user gives a period (`7d`, `12h`). It
+   prints `# since:` and `# now:`, then one block per session, newest first: `## <id>` (`open` while it
+   runs), then `last`, `where`, `title`, `linked` (`(up to date)`: the item changed after the session's
+   last activity), `closed` (items the session closed), `same branch`, `prompts`, `last answer`,
+   `edited`, `prs` and `line`, the session line to append. Lines with nothing to say are left out.
+2. Decide each session with the first rule that applies:
+   1. `linked`: update that item, unless it is `(up to date)`.
+   2. `same branch`: link it to that item.
+   3. An item about the same subject (title, Left off, Context; read its file with Read when the index
+      line is not enough), favoring `doing`, `paused` and `idea`: link it there, marked as likely.
+   4. Several sessions about the same subject that no item covers: one new item for all of them.
+   5. A quick question or lookup: ignore. Anything else: a new item.
+
+   Never link a session again to an item in its `closed`. This session counts like any other.
+3. Show the plan, answer options included, in the configured language, then stop and wait:
+
+   ```
+   6 sessions (2 open) since 13/10 18:00
+
+   Update
+    1. Redirect depois do logout ← web-app main · e2e test done, PR #31 open
+   Link to an existing item
+    2. Pix no checkout (paused → doing) ← web-app feature/pix (open) · same branch, QR code done
+   Create
+    3. Migrar o CI para GitHub Actions ← api chore/actions
+   Ignore
+    4. notes · questions about git
+   Up to date: 1
+
+   Apply? yes · "without 2" · "3 goes to <item>" · no
+   ```
+
+   One line per item: its title, the sessions (repository and branch, `(open)` while running) and what
+   changes in a few words. Propose `done` only for work the sessions clearly finished; the user's yes
+   is the confirmation `done` needs.
+4. Write nothing before the answer. On a yes or adjustments, for each item: append the `line` of each of
+   its sessions to `## Sessions` (unless that session already has a line there not closed), bring the
+   Steps up to date with what the sessions did and left (see "Writing an item"), set Left off, add
+   the PRs from `prs` as `[open]`, set the status in the plan and `updated`. Create new items the way
+   `new` does, with a group only when an existing one clearly fits.
+5. Unless the user cancelled, run `rumo sessions --reviewed "<now>"` with the `# now:` of the listing,
+   so the next review starts there. Confirm in one line what changed; open sessions linked now keep
+   their items current from their next prompt.
 
 ## Writing an item
 
