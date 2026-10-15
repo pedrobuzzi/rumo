@@ -865,10 +865,9 @@ class RumoApp(App):
         body.update("\n\n".join(parts))
 
         self.shown = [s for s in item.steps if not (self.hide_done and s.done)]
-        hidden = len(item.steps) - len(self.shown)
-        self.query_one("#steps-title", Label).update(
-            Text.assemble("Steps", (f"  {hidden} done hidden · x shows them", "dim") if hidden else "")
-        )
+        done = sum(s.done for s in item.steps)
+        hint = f'{done} done hidden · "x" shows them' if self.hide_done else f'{done} done · "x" hides them'
+        self.query_one("#steps-title", Label).update(Text.assemble("Steps", (f"  {hint}", "dim") if done else ""))
         steps.extend(self.step_row(s) for s in self.shown)
         if has_prs:
             guessed = self.gh is None and any(not p.finished and "/pull/" in p.url for p in item.prs)

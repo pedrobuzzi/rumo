@@ -546,12 +546,12 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.press("x")
             await pilot.pause()
             self.assertEqual(self.shown_steps(app), ["[ ] [manual] Pedir review"])
-            self.assertIn("1 done hidden", str(app.query_one("#steps-title", Label).render()))
+            self.assertIn('1 done hidden · "x" shows them', str(app.query_one("#steps-title", Label).render()))
             self.assertIn("x show done", keys())
             await pilot.press("x")
             await pilot.pause()
             self.assertEqual(len(self.shown_steps(app)), 2)
-            self.assertNotIn("hidden", str(app.query_one("#steps-title", Label).render()))
+            self.assertIn('1 done · "x" hides them', str(app.query_one("#steps-title", Label).render()))
             self.assertIn("x hide done", keys())
 
     async def test_hiding_done_steps_is_remembered_between_runs(self):
