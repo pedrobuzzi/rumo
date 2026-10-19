@@ -19,13 +19,13 @@ from datetime import date, datetime, timedelta
 from pathlib import Path
 
 STATUSES = ("idea", "doing", "waiting", "paused", "done")
-KINDS = ("agent", "manual")  # who does a step: the agent, or the user (or someone else) outside it
+KINDS = ("agent", "manual", "waiting")  # who acts: the agent, the user outside it, or someone or something else
 PR_STATES = ("open", "draft", "merged", "closed")  # a PR line without one: nobody has said yet
 
 TIME_FORMAT = "%Y-%m-%d %H:%M"
 PAST_WINDOW_DAYS = 14
 
-_STEP_RE = re.compile(r"^- \[( |x|X)\] (?:\[(agent|manual)\] )?(.*)$")
+_STEP_RE = re.compile(r"^- \[( |x|X)\] (?:\[(agent|manual|waiting)\] )?(.*)$")
 _SECTION_RE = re.compile(r"^## (.+?)\s*$")
 _PR_RE = re.compile(r"^- (?:\[(open|draft|merged|closed)\] )?(https?://\S+)(?: +(.*))?$")
 # A pull or merge request on GitHub (or GitHub Enterprise), GitLab or Bitbucket: the link up to its number.
@@ -39,7 +39,7 @@ class WriteConflict(Exception):
 @dataclass
 class Step:
     done: bool
-    kind: str  # "agent", "manual" or "" when the line has no marker
+    kind: str  # one of KINDS, or "" when the line has no marker
     text: str
     line: int  # index of the line in the file
 

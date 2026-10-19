@@ -4,6 +4,7 @@
     language = "pt-BR"            # language of the content the agent writes
     tags = ["bug", "feature"]     # fixed list the agent picks from
     ask_to_track = true           # in agent sessions without an item, offer to track them (unset: ask once)
+    step_lines = 2                # open steps shown under each item in the list, 1 to 6
 
     [groups.auth]
     name = "Migração auth"        # content: any language
@@ -40,6 +41,8 @@ PALETTE = {
     "cyan": "#2ab7c9",
 }
 
+STEP_LINES = 6
+
 DEFAULT_TAGS = [
     "bug", "feature", "refactor", "research", "spike", "review",
     "infra", "deploy", "meeting", "docs", "support", "tech-debt",
@@ -61,6 +64,7 @@ class Config:
     tags: list[str] = field(default_factory=lambda: list(DEFAULT_TAGS))
     groups: dict[str, Group] = field(default_factory=dict)
     ask_to_track: bool | None = None  # None: the user was never asked
+    step_lines: int = 2  # open steps under each item in the list, STEP_LINES at most
     error: str | None = None
 
 
@@ -96,6 +100,8 @@ def load(path: Path | None = None) -> Config:
         cfg.tags = [str(t) for t in tags]
     if isinstance(ask := data.get("ask_to_track"), bool):
         cfg.ask_to_track = ask
+    if isinstance(lines := data.get("step_lines"), int) and not isinstance(lines, bool):
+        cfg.step_lines = min(max(lines, 1), STEP_LINES)
     groups = data.get("groups")
     for key, value in (groups.items() if isinstance(groups, dict) else []):
         if isinstance(value, dict):
@@ -218,6 +224,7 @@ def default_text(folder: Path, language: str) -> str:
         f"folder = {toml_str(str(folder))}\n"
         f"language = {toml_str(language)}\n"
         f"tags = [{tags}]\n"
+        f"step_lines = 2  # open steps shown under each item in the list, 1 to {STEP_LINES}\n"
         "\n"
         "# Groups connect related items; each group shows in its own color.\n"
         "# [groups.auth]\n"

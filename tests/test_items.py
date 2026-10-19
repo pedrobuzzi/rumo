@@ -164,6 +164,14 @@ class ItemsTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             items.add_step(item, "Algo", "someone")
 
+    def test_a_waiting_step_is_read_and_written_like_the_other_kinds(self):
+        self.path.write_text(ITEM.replace("- [ ] [agent] Teste e2e", "- [ ] [waiting] Resposta do time\n- [ ] [agent] Teste e2e"),
+                             encoding="utf-8")
+        item = items.load(self.path)
+        self.assertEqual((item.steps[2].kind, item.steps[2].text), ("waiting", "Resposta do time"))
+        items.add_step(item, "Revisão da Apple", "waiting")
+        self.assertIn("- [ ] [waiting] Revisão da Apple", self.path.read_text(encoding="utf-8"))
+
     def test_step_edits_refuse_when_the_line_changed(self):
         item = items.load(self.path)
         stale = item.steps[1]
@@ -336,6 +344,14 @@ class ConfigTest(unittest.TestCase):
             ("migracao-auth", "Migração auth", "blue"),
             ("migracao-auth-2", "Migração auth", "green"),
         ])
+
+    def test_step_lines_defaults_to_2_and_stays_between_1_and_6(self):
+        self.assertEqual(config.load(self.path).step_lines, 2)
+        self.path.write_text(config.default_text(self.root / "items", "pt-BR"), encoding="utf-8")
+        self.assertEqual(config.load(self.path).step_lines, 2)
+        for value, lines in (("4", 4), ("0", 1), ("9", 6), ('"três"', 2), ("true", 2)):
+            self.path.write_text(f"step_lines = {value}\n", encoding="utf-8")
+            self.assertEqual(config.load(self.path).step_lines, lines, value)
 
     def test_updates_a_group_and_keeps_the_rest_of_the_file(self):
         original = (

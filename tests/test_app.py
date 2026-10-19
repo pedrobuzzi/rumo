@@ -126,10 +126,34 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             logout = self.row_text(app, "item:logout").splitlines()
             self.assertEqual(len(logout), 2)
             self.assertRegex(logout[0], r"^● +Migração auth +logout +1/2 *$")
-            self.assertRegex(logout[1], r"^ +↳ Pedir review *$")
+            self.assertRegex(logout[1], r"^ +↳ manual  Pedir review *$")
             pix = self.row_text(app, "item:pix").splitlines()[0]
             self.assertRegex(pix, r"^● +Pagamentos +Pix no checkout +0/1 *$")
             self.assertRegex(self.row_text(app, "item:waiting-infra").splitlines()[0], r"^◐ +waiting-infra *$")
+
+    async def test_a_row_shows_the_next_open_steps_up_to_step_lines_each_saying_who_acts(self):
+        item(self.folder, "pix", "doing", "2026-10-11 09:00", title="Pix no checkout", body=(
+            "## Steps\n- [x] [agent] Ler a doc do PSP\n- [ ] [manual] Pedir a chave ao banco\n"
+            "- [ ] [waiting] Resposta do banco\n- [ ] [agent] Gerar o QR code\n"))
+
+        def steps_shown(lines: int | None) -> list[str]:
+            return [line.strip() for line in rows[lines][1:]]
+
+        rows = {}
+        for lines in (None, 1, 6):
+            text = config.default_text(self.folder, "pt-BR")
+            if lines:
+                text = text.replace("step_lines = 2", f"step_lines = {lines}")
+            self.config.write_text(text if lines else text.replace("step_lines = 2", "# step_lines"), encoding="utf-8")
+            app = self.app()
+            async with app.run_test() as pilot:
+                await pilot.pause()
+                rows[lines] = self.row_text(app, "item:pix").splitlines()
+        self.assertEqual(steps_shown(None), ["↳ manual  Pedir a chave ao banco", "waiting Resposta do banco"])
+        self.assertEqual(steps_shown(1), ["↳ manual  Pedir a chave ao banco"])
+        self.assertEqual(steps_shown(6), [  # fewer open steps than lines: only those, aligned under the first
+            "↳ manual  Pedir a chave ao banco", "waiting Resposta do banco", "agent   Gerar o QR code"])
+        self.assertEqual(rows[6][2].index("waiting"), rows[6][1].index("manual"))
 
     async def test_the_label_fits_the_longest_group_name_up_to_16_characters(self):
         config.add_group(self.config, "Plataforma de pagamentos", "red")
@@ -445,17 +469,22 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
     def steps(self) -> list[str]:
         return [f"{'x' if s.done else ' '} {s.kind} {s.text}" for s in items.load(self.logout).steps]
 
-    async def test_a_adds_a_step_after_the_open_ones_and_tab_switches_agent_and_manual(self):
+    async def test_a_adds_a_step_after_the_open_ones_and_tab_switches_agent_manual_and_waiting(self):
         app = self.app()
         async with app.run_test() as pilot:
             await pilot.press("a")
             hint = str(app.screen.query_one("#kind", Static).render())
             self.assertIn("tab", hint)
             self.assertIn("[agent]", hint)
+            self.assertIn("waiting", hint)
             await pilot.press(*"Atualizar docs", "tab", "enter")
             await pilot.pause()
             self.assertEqual(self.steps()[-1], "  manual Atualizar docs")
             self.assertEqual(app.query_one("#steps", ListView).index, 2)
+            await pilot.press("a", *"Resposta do time", "tab", "tab", "enter")
+            await pilot.pause()
+            self.assertEqual(self.steps()[-1], "  waiting Resposta do time")
+            self.assertIn("[ ] [waiting] Resposta do time", self.shown_steps(app))
 
     async def test_in_the_steps_a_adds_below_and_enter_edits_the_highlighted_step(self):
         app = self.app()
@@ -466,7 +495,7 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(self.steps(), ["x agent Ajustar handler", "  agent Revisar o fluxo", "  manual Pedir review"])
             await pilot.press("down", "enter", *" do time", "tab", "enter")
             await pilot.pause()
-            self.assertEqual(self.steps()[2], "  agent Pedir review do time")
+            self.assertEqual(self.steps()[2], "  waiting Pedir review do time")  # manual -> waiting
 
     async def test_shift_arrows_move_a_step_and_d_deletes_it_after_confirming(self):
         app = self.app()

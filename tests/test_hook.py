@@ -44,7 +44,7 @@ class HookTest(unittest.TestCase):
         result = self.run_hook(json.dumps({"session_id": "open-session"}))
         self.assertEqual(result.returncode, 0)
         self.assertIn("2026-10-11-migração.md (status: waiting)", result.stdout)
-        for rule in ("Left off", "Steps", "[manual]", "| closed", "language"):
+        for rule in ("Left off", "Steps", "[manual]", "[waiting]", "| closed", "language"):
             self.assertIn(rule, result.stdout)
 
     def test_shows_the_next_open_steps_so_the_agent_can_keep_them_current(self):

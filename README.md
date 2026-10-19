@@ -11,7 +11,8 @@ Timeline, and let your AI agent sessions keep it up to date while you work.
 - **Later**: ideas and paused work, so nothing you meant to do gets lost.
 
 Items can belong to a **group** (a project or initiative), shown as a label with its name on its
-color; color in rumo only ever means the group. One item is one line, plus its next step. rumo shows
+color; on titles and labels, color only ever means the group. One item is one line, plus its next open
+steps (2 by default, `step_lines` in the config), each saying who acts: `manual`, `agent` or `waiting`. rumo shows
 one horizon at a time (`h` steps Now, Later, Past), named in a banner atop the list, in three views: the **Timeline**,
 **Projects** (one block per group) and **Repos** (one block per repository of the item's latest
 agent session). The interface is in English; the content (titles, notes, steps) is in your own
@@ -76,7 +77,7 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | `t` | toggle tags |
 | `n` | capture a new idea |
 | `e` | open the item in `$EDITOR` |
-| `a` | add a step to the selected item, after its open steps (below the highlighted one when the steps have focus); in the dialog, Tab switches `[agent]` and `[manual]` |
+| `a` | add a step to the selected item, after its open steps (below the highlighted one when the steps have focus); in the dialog, Tab goes through `[agent]`, `[manual]` and `[waiting]` |
 | Enter, shift+↑ ↓, `d`, space | with the steps focused: edit, move, delete (asks first) or check the highlighted step; Esc goes back |
 | `x` | hide or show the done steps of every item (rumo remembers it) |
 | `p` | add a PR link to the selected item (a title may follow the link); in the dialog, Tab switches the state |
@@ -164,6 +165,7 @@ Users land on a protected page after logging out.
 ## Steps
 - [x] [agent] Fix the logout handler
 - [ ] [manual] Ask for a PR review
+- [ ] [waiting] Review from the team
 - [ ] [agent] e2e test for logout
 
 ## PRs
@@ -174,7 +176,9 @@ Users land on a protected page after logging out.
 ```
 
 - Statuses: `idea`, `doing`, `waiting`, `paused`, `done`. `done: <date>` is set when an item is finished.
-- Steps are `[agent]` (the AI can do it) or `[manual]` (you or someone else does it).
+- Steps say who acts: `[agent]` (the AI can do it), `[manual]` (you do it) or `[waiting]` (someone or
+  something else must act first: a reviewer, the App Store, a client). When the first open step is
+  `[waiting]`, the agent sets the item to `waiting`.
 - PRs are one link per line, with the state in brackets (`open`, `draft`, `merged`, `closed`; none when
   unknown) and an optional title after the link.
 - An idea can be just the frontmatter; it grows when you start working on it.
@@ -191,6 +195,7 @@ language = "pt-BR"     # language of the content the agent writes; defaults to y
 tags = ["bug", "feature", "refactor", "research", "spike", "review",
         "infra", "deploy", "meeting", "docs", "support", "tech-debt"]
 ask_to_track = true    # offer rumo in agent sessions without an item; unset until you first answer
+step_lines = 2         # open steps shown under each item in the list, 1 to 6
 
 [groups.auth]
 name = "Auth migration"

@@ -31,6 +31,9 @@ from rumo.items import Item, WriteConflict
 
 # Color only ever means the group, so a status is a shape: full when active, empty when not started.
 SHAPES = {"doing": "●", "waiting": "◐", "idea": "○", "paused": "◌", "done": "✓"}
+# Who acts on a step, in the list and in the detail: what is yours stands out, the agent's stays quiet.
+KIND_STYLES = {"manual": "yellow", "agent": "dim", "waiting": "cyan"}
+KIND_WIDTH = max(map(len, items.KINDS)) + 1  # the step texts under an item line up
 VIEWS = {"timeline": "Timeline", "projects": "Projects", "repos": "Repos"}
 HORIZONS: tuple[str, ...] = ("past", "now", "later")
 CYCLE = ("now", "later", "past")  # what `h` steps through, starting where rumo opens
@@ -317,11 +320,11 @@ class TagScreen(ModalScreen[list[str] | None]):
 
 
 class StepScreen(ModalScreen[tuple[str, str] | None]):
-    """A step's text and who does it: Tab switches between [agent] and [manual], Enter saves."""
+    """A step's text and who acts on it: Tab goes through [agent], [manual] and [waiting], Enter saves."""
 
     BINDINGS = [
         Binding("escape", "dismiss(None)", "cancel"),
-        Binding("tab", "switch_kind", "agent/manual", priority=True),
+        Binding("tab", "switch_kind", "who acts", priority=True),
     ]
 
     def __init__(self, title: str, text: str = "", kind: str = "agent") -> None:
@@ -742,7 +745,8 @@ class RumoApp(App):
         return Option(self.row(item, label), id=f"item:{item.slug}")
 
     def row(self, item: Item, label: bool) -> Table:
-        """Symbol, project label, title and progress (or the date in Past) on one line; the next step below."""
+        """Symbol, project label, title and progress (or the date in Past) on one line; below, the next open
+        steps (`step_lines` of them at most), each saying who acts."""
         group = self.cfg.groups.get(item.group)
         grid = Table.grid(padding=(0, 1), expand=True)
         grid.add_column(width=1, no_wrap=True)
@@ -761,8 +765,11 @@ class RumoApp(App):
         title = Text(display_title(item.title, group.name if group else ""))
         pr_cells = [Text(plural(open_prs, "PR"), "dim")] if open_prs else []
         grid.add_row(symbol, *([self.label(group)] if label else []), title, *pr_cells, Text(right, "dim"))
-        if item.status != "done" and (step := item.next_step):
-            grid.add_row("", *([""] if label else []), Text(f"↳ {step.text}", "dim"), *[""] * len(pr_cells), "")
+        pending = [s for s in item.steps if not s.done] if item.status != "done" else []
+        for n, step in enumerate(pending[: self.cfg.step_lines]):
+            line = Text.assemble(("↳ " if n == 0 else "  ", "dim"),
+                                 (f"{step.kind:<{KIND_WIDTH}}", KIND_STYLES.get(step.kind, "dim")), (step.text, "dim"))
+            grid.add_row("", *([""] if label else []), line, *[""] * len(pr_cells), "")
         return grid
 
     def view_tabs(self) -> Text:
@@ -898,7 +905,7 @@ class RumoApp(App):
         kind = f"[{step.kind}] " if step.kind else ""
         if step.done:
             return wrapping_row(Text(f"[x] {kind}", "dim strike"), Text(step.text, "dim strike"))
-        return wrapping_row(Text.assemble("[ ] ", (kind, "yellow" if step.kind == "manual" else "dim")), Text(step.text))
+        return wrapping_row(Text.assemble("[ ] ", (kind, KIND_STYLES.get(step.kind, "dim"))), Text(step.text))
 
     # ---------- actions ----------
 

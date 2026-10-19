@@ -36,7 +36,7 @@ If `rumo` is not found, stop and tell the user to install it, then run `/rumo` a
 `brew install pedrobuzzi/tap/rumo` (macOS, Linux).
 
 Write item content (title, Left off, Context, steps) in the configured `language`; keep the structure
-(frontmatter keys, section names, statuses, tags, `[agent]`/`[manual]`) in English. Follow "Writing an
+(frontmatter keys, section names, statuses, tags, `[agent]`/`[manual]`/`[waiting]`) in English. Follow "Writing an
 item" every time you create or change an item.
 
 ## 1. No subcommand: show the menu
@@ -107,16 +107,18 @@ Works in any session, linked or not.
 1. **Pick the item.** The linked one; with several linked, the one the step belongs to. With none
    linked (or in simple mode), the item it most likely belongs to (the conversation, this repository,
    the group, the words of the step); ask only when two or more fit equally, listing up to 3 (title, slug).
-2. Add `- [ ] [agent] <text>` or `- [ ] [manual] <text>` (manual = the user or someone else does it
-   outside the agent: review, deploy, a call), as one short line starting with a verb, in the
-   configured language. Put it after the open steps, or first if it is the next action. Update `updated`.
+2. Add `- [ ] [agent] <text>`, `- [ ] [manual] <text>` (the user does it outside the agent: a review,
+   a deploy, a call) or `- [ ] [waiting] <text>` (someone or something else must act first: a reviewer,
+   the App Store, a client; name who or what), as one short line starting with a verb, in the
+   configured language. Put it after the open steps, or first if it is the next action. Update `updated`
+   (and the status, see "Writing an item").
 3. Confirm in one line: the step and the item's title. Adding a step never links the session.
 
 ### park [reason]
 1. Ask, if unclear: `waiting` (blocked on someone or something else) or `paused` (the user chose to
    stop for now).
 2. Make sure the Steps tell someone with no context how to resume: every pending piece of work is a
-   step and the next action is the first open one. Set Left off to one line: the blocker, or why it
+   step and the next action is the first open one (for `waiting`, a `[waiting]` step naming who or what). Set Left off to one line: the blocker, or why it
    stops here.
 3. Set the status and `updated`, then append ` | closed` to **this session's** line in Sessions.
 
@@ -184,8 +186,11 @@ else stays short.
 
 - **One step, one action, one line.** Start with a verb, keep it under about 70 characters, and add a
   detail (a commit, an id, a command) only when that step needs it. `[agent]` is work the agent does;
-  `[manual]` is work the user or someone else does (a review, a deploy, a decision).
+  `[manual]` is work the user does (a review, a deploy, a decision); `[waiting]` is what someone or
+  something else must do first (a reviewer, the App Store, a client), naming who or what.
 - **The first open step is the next action.** Reorder when priorities change.
+- **The status follows a `[waiting]` step.** When the first open step is `[waiting]`, set `status:
+  waiting`; when it no longer is (it got done, or work came before it), set `doing`.
 - **Keep the Steps current while linked.** After every response in which work happened: check what got
   done, add a step for whatever came up or was left for later, reword steps that changed. The hook
   repeats the open steps on every prompt, and nudges you when a turn's work reached no linked item.
@@ -194,8 +199,8 @@ else stays short.
 - **The user edits steps too**, in the rumo app or an editor. The hook points out what changed since
   your last response: never add back a step they removed, and do not start one they added unless asked.
 - **Name the next step when you finish one.** When you check off the step you were working on and
-  open steps remain, end with one line in the user's language: offer to start an `[agent]` step, or
-  say a `[manual]` one is theirs.
+  open steps remain, end with one line in the user's language: offer to start an `[agent]` step, say
+  a `[manual]` one is theirs, or say what a `[waiting]` one waits on.
 - **Left off is one line**: where it stands or what blocks it. Not a copy of the next step.
 - **Context is at most 3 short lines**: what this is and why it matters. No history, logs, commands or
   list of what was done (the checked steps are that). A link to a longer document is fine.
@@ -255,7 +260,8 @@ updated: 2026-10-11 16:30
 ## Steps
 - [x] [agent] <done: one short line, starting with a verb>
 - [ ] [agent] <the next action>
-- [ ] [manual] <what the user or someone else does>
+- [ ] [manual] <what the user does>
+- [ ] [waiting] <who or what the item waits on>
 
 ## PRs
 - [open] https://github.com/acme/web-app/pull/42 <short title>
