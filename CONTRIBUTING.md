@@ -68,7 +68,9 @@ the GitHub marketplace) on clean macOS, Linux and Windows machines and runs
 puts a legacy `*-nspkg.pth` in Homebrew's Python, the way packages installed there with pip do on
 real machines (it once broke the formula). In the release it runs after `brew update-python-resources`,
 which runs pip on that same Python and breaks on that file too. `install-check` also runs every Monday, so a change in Homebrew, a dependency or Claude
-Code that breaks installing shows up even between releases. Claude Code users get the new
+Code that breaks installing shows up even between releases; there it runs the smoke test of the
+release it installed (`scripts/smoke_test_installed.sh`), since main may already check what is not
+released yet. Claude Code users get the new
 plugin version from `/plugin marketplace update rumo`.
 
 To test the Homebrew formula before a release (macOS, does not push and leaves Homebrew as it was):

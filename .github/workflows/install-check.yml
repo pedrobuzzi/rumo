@@ -1,7 +1,9 @@
 # Install rumo the way users do, on clean machines, and smoke-test it:
 # Homebrew (from the tap), uv, pipx and the Claude Code plugin (from the GitHub marketplace).
 # Runs at the end of every release, every Monday (to catch changes in Homebrew, PyPI packages or
-# Claude Code even without a release), when this check itself changes, and on demand.
+# Claude Code even without a release), when this check itself changes, and on demand. Outside a
+# release, the smoke test is the one of the release that got installed (scripts/smoke_test_installed.sh):
+# main may already check what is not released yet.
 name: install-check
 
 on:
@@ -15,7 +17,7 @@ on:
     - cron: "0 9 * * 1"
   push:
     branches: [main]
-    paths: [".github/workflows/install-check.yml", "scripts/smoke_test.sh"]
+    paths: [".github/workflows/install-check.yml", "scripts/smoke_test_installed.sh"]
   workflow_dispatch:
 
 permissions:
@@ -38,7 +40,7 @@ jobs:
       - name: Smoke test
         env:
           VERSION: ${{ inputs.version }}
-        run: scripts/smoke_test.sh "$VERSION" "$(brew --prefix rumo)/libexec/bin/python"
+        run: scripts/smoke_test_installed.sh "$VERSION" "$(brew --prefix rumo)/libexec/bin/python"
 
   uv:
     name: uv (${{ matrix.os }})
@@ -72,7 +74,7 @@ jobs:
         run: |
           python="$(uv tool dir)/rumo-cli/bin/python"
           [ -x "$python" ] || python="$(uv tool dir)/rumo-cli/Scripts/python.exe"
-          scripts/smoke_test.sh "$VERSION" "$python"
+          scripts/smoke_test_installed.sh "$VERSION" "$python"
 
   pipx:
     name: pipx (${{ matrix.os }})
@@ -100,7 +102,7 @@ jobs:
       - name: Smoke test
         env:
           VERSION: ${{ inputs.version }}
-        run: scripts/smoke_test.sh "$VERSION" "$(pipx environment --value PIPX_LOCAL_VENVS)/rumo-cli/bin/python"
+        run: scripts/smoke_test_installed.sh "$VERSION" "$(pipx environment --value PIPX_LOCAL_VENVS)/rumo-cli/bin/python"
 
   plugin:
     runs-on: ubuntu-latest
