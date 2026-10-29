@@ -1,7 +1,7 @@
 [project]
 name = "rumo-cli"
 version = "0.5.0"
-description = "Your dev work, past, now and later: Markdown files, a terminal Timeline, and AI agents that keep it current"
+description = "Your agent forgets, rumo doesn't: what each AI agent session did and what is left, in Markdown files and a terminal Timeline"
 readme = "README.md"
 requires-python = ">=3.11"
 license = "MIT"

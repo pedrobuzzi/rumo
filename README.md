@@ -1,8 +1,9 @@
 # rumo
 
-**Your work, past, now and later.** rumo is a local, file-based organizer for a developer's own
-work. Every piece of work is a Markdown file on your machine. Run `rumo` to see it all as a
-Timeline, and let your AI agent sessions keep it up to date while you work.
+**Your agent forgets. rumo doesn't.** rumo keeps what each AI agent session did and what is left, one
+Markdown file per piece of work on your machine, through `/compact`, `/clear` and from one day to the
+next. Run `rumo` to see it all as a Timeline and know what got done, what is left and who acts next,
+without rereading a conversation.
 
 ![rumo Timeline](docs/timeline.svg)
 

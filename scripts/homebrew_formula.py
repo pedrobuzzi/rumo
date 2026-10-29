@@ -9,7 +9,7 @@ import sys
 TEMPLATE = '''class Rumo < Formula
   include Language::Python::Virtualenv
 
-  desc "Your dev work, past, now and later: Markdown files and a terminal Timeline"
+  desc "What your AI agent did and what is left, in Markdown and a terminal Timeline"
   homepage "https://github.com/pedrobuzzi/rumo"
   url "{url}"
   sha256 "{sha256}"

@@ -12,7 +12,7 @@ import io
 import os
 import sys
 
-USAGE = """rumo: your work, past, now and later.
+USAGE = """rumo: your agent forgets, rumo doesn't.
 
   rumo        open the Timeline
 
