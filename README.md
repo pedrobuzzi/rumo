@@ -128,6 +128,10 @@ three. After a compaction, even one in the middle of a turn, and when a session 
 gets its items back at once. `/clear` starts a new, unlinked session; `claude --resume <id>` picks the
 old one up again.
 
+Steps added or done since you last looked at an item are marked until you move on to another one:
+`+2 ✓1` in the list, `new` and `done since you looked` in its detail. An item that appeared since then
+says `new`. What you change yourself, in the Timeline or with `e`, is never news.
+
 You can add, edit, move, check and delete steps in the Timeline too. On your next message, a linked
 session is told which steps changed since its last answer, so it neither redoes nor re-adds them, and
 it starts none of them unless you ask. When the agent finishes a step and more remain, it ends with

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 import re
 import shlex
@@ -280,6 +281,19 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}{'' if n == 1 else 's'}"
 
 
+def seen_key(step: items.Step) -> str:
+    """How rumo remembers a step you saw: a short hash of its text, and whether it was done."""
+    return f"{hashlib.sha1(step.text.encode('utf-8')).hexdigest()[:10]}:{int(step.done)}"
+
+
+def news_label(news: dict[str, str] | None) -> str:
+    """`+2 ✓1`: steps added and steps done since you last looked; `new` for an item you never saw."""
+    if news is None:
+        return "new"
+    added, done = sum(n == "new" for n in news.values()), sum(n == "done" for n in news.values())
+    return " ".join(part for part in (f"+{added}" if added else "", f"✓{done}" if done else "") if part)
+
+
 class TextScreen(ModalScreen[str | None]):
     BINDINGS = [Binding("escape", "dismiss(None)", "cancel")]
 
@@ -524,6 +538,8 @@ class RumoApp(App):
         self.shown: list[items.Step] = []  # the steps the list shows, in order
         self.horizon = "now"  # one horizon at a time; never remembered, rumo always opens on Now
         self.mtimes: dict[str, float] = {}
+        self.viewed: dict[str, list[str]] | None = None  # item path -> its steps when you last looked (state.json)
+        self.shown_slug: str | None = None  # the item in the detail, marked as seen once you move on
         self.load_state()
 
     def compose(self) -> ComposeResult:
@@ -616,6 +632,9 @@ class RumoApp(App):
         self.cfg = config.load(self.config_path)
         self.mtimes = self.read_mtimes()
         self.items = {i.slug: i for i in items.list_items(self.cfg.folder)}
+        if self.viewed is None:
+            self.viewed = {str(i.path): [seen_key(s) for s in i.steps] for i in self.items.values()}
+            self.save_viewed()
         self.build_timeline()
         self.show_detail()
         self.query_one("#legend", Static).update(self.legend())
@@ -634,10 +653,14 @@ class RumoApp(App):
         return term in " ".join(haystack).lower()
 
     def write(self, operation: Callable[[], object]) -> None:
+        item = self.current_item()
+        before = [seen_key(s) for s in item.steps] if item else []
         try:
             operation()
         except WriteConflict:
             self.notify("The item just changed on disk. Reloaded; try again.", severity="warning")
+        if item:
+            self.saw(item.path, before)
         self.reload()
 
     # ---------- timeline ----------
@@ -779,7 +802,10 @@ class RumoApp(App):
             grid.add_column(width=self.name_width + 2, no_wrap=True)
         grid.add_column(ratio=1, no_wrap=True, overflow="ellipsis")
         open_prs = sum(not p.finished for p in item.prs)
-        if open_prs:
+        news = news_label(self.news(item))
+        cells = [Text(news, "bold")] if news else []  # what changed since you last looked
+        cells += [Text(plural(open_prs, "PR"), "dim")] if open_prs else []
+        for _ in cells:
             grid.add_column(no_wrap=True)
         grid.add_column(width=6, no_wrap=True, justify="right")
         if item.status == "done":
@@ -788,14 +814,13 @@ class RumoApp(App):
             right = f"{sum(s.done for s in item.steps)}/{len(item.steps)}" if item.steps else ""
         symbol = Text(SHAPES[item.status], "" if item.status == "doing" else "dim")
         title = Text(display_title(item.title, group.name if group else ""))
-        pr_cells = [Text(plural(open_prs, "PR"), "dim")] if open_prs else []
-        grid.add_row(symbol, *([self.label(group)] if label else []), title, *pr_cells, Text(right, "dim"))
+        grid.add_row(symbol, *([self.label(group)] if label else []), title, *cells, Text(right, "dim"))
         pending = [s for s in item.steps if not s.done] if item.status != "done" else []
         below = [(step.kind, KIND_STYLES.get(step.kind, "dim"), step.text) for step in pending[: self.cfg.step_lines]]
         below += [("git", GIT_STYLE, left.label) for left in self.git_left.get(item.slug, [])]
         for n, (who, style, text) in enumerate(below):
             line = Text.assemble(("↳ " if n == 0 else "  ", "dim"), (f"{who:<{KIND_WIDTH}}", style), (text, "dim"))
-            grid.add_row("", *([""] if label else []), line, *[""] * len(pr_cells), "")
+            grid.add_row("", *([""] if label else []), line, *[""] * len(cells), "")
         return grid
 
     def view_tabs(self) -> Text:
@@ -861,6 +886,11 @@ class RumoApp(App):
 
     def show_detail(self) -> None:
         item = self.current_item()
+        if self.shown_slug != (item.slug if item else None):
+            left = self.items.get(self.shown_slug) if self.shown_slug else None
+            self.shown_slug = item.slug if item else None
+            if left and self.mark_viewed(left):  # you moved on: what it shows now is what you saw
+                self.build_timeline()
         header = self.query_one("#header", Static)
         body = self.query_one("#body", Markdown)
         steps = self.query_one("#steps", ListView)
@@ -901,9 +931,12 @@ class RumoApp(App):
 
         self.shown = [s for s in item.steps if not (self.hide_done and s.done)]
         done = sum(s.done for s in item.steps)
-        hint = f'{done} done hidden · "x" shows them' if self.hide_done else f'{done} done · "x" hides them'
-        self.query_one("#steps-title", Label).update(Text.assemble("Steps", (f"  {hint}", "dim") if done else ""))
-        steps.extend(self.step_row(s) for s in self.shown)
+        news = self.news(item) or {}
+        hints = [f"{news_label(news)} since you looked"] if news else []
+        if done:
+            hints.append(f'{done} done hidden · "x" shows them' if self.hide_done else f'{done} done · "x" hides them')
+        self.query_one("#steps-title", Label).update(Text.assemble("Steps", (f"  {' · '.join(hints)}", "dim") if hints else ""))
+        steps.extend(self.step_row(s, news.get(s.text, "")) for s in self.shown)
         if has_prs:
             guessed = self.gh is None and any(not p.finished and "/pull/" in p.url for p in item.prs)
             self.query_one("#prs-title", Label).update(Text.assemble(
@@ -929,11 +962,12 @@ class RumoApp(App):
         ))
 
     @staticmethod
-    def step_row(step: items.Step) -> ListItem:
+    def step_row(step: items.Step, news: str = "") -> ListItem:
         kind = f"[{step.kind}] " if step.kind else ""
+        mark = ({"new": "  new", "done": "  done since you looked"}.get(news, ""), "bold")
         if step.done:
-            return wrapping_row(Text(f"[x] {kind}", "dim strike"), Text(step.text, "dim strike"))
-        return wrapping_row(Text.assemble("[ ] ", (kind, KIND_STYLES.get(step.kind, "dim"))), Text(step.text))
+            return wrapping_row(Text(f"[x] {kind}", "dim strike"), Text.assemble((step.text, "dim strike"), mark))
+        return wrapping_row(Text.assemble("[ ] ", (kind, KIND_STYLES.get(step.kind, "dim"))), Text.assemble(step.text, mark))
 
     # ---------- actions ----------
 
@@ -960,9 +994,66 @@ class RumoApp(App):
         if (view := state.get("view")) in VIEWS:
             self.view = view
         self.hide_done = state.get("hide_done") is True
+        viewed = state.get("steps_viewed")
+        if isinstance(viewed, dict):
+            self.viewed = {str(k): [str(x) for x in v] for k, v in viewed.items() if isinstance(v, list)}
 
     def save_state(self) -> None:
         config.update_state(self.config_path, view=self.view, hide_done=self.hide_done)
+
+    # What changed since you last looked at an item: its steps then are kept as `seen_key`s, taken when you
+    # move on to another item or quit. The first run takes everything as seen.
+
+    def news(self, item: Item) -> dict[str, str] | None:
+        """The steps added or done since you last looked at the item, {text: "new" or "done"}; None for an
+        item you have not seen yet."""
+        if self.viewed is None:
+            return {}
+        seen = self.viewed.get(str(item.path))
+        if seen is None:
+            return None
+        was: dict[str, set[str]] = {}
+        for key in seen:
+            text, _, done = key.partition(":")
+            was.setdefault(text, set()).add(done)
+        found = {}
+        for step in item.steps:
+            text, _, done = seen_key(step).partition(":")
+            if text not in was:
+                found[step.text] = "new"
+            elif done == "1" and "1" not in was[text]:
+                found[step.text] = "done"
+        return found
+
+    def mark_viewed(self, item: Item) -> bool:
+        if self.viewed is None or self.viewed.get(str(item.path)) == (keys := [seen_key(s) for s in item.steps]):
+            return False
+        self.viewed[str(item.path)] = keys
+        self.save_viewed()
+        return True
+
+    def saw(self, path: Path, before: list[str]) -> None:
+        """What you just changed yourself is no news: it joins what you have seen of the item."""
+        try:
+            after = [seen_key(s) for s in items.load(path).steps]
+        except (OSError, ValueError):
+            return
+        seen = self.viewed.get(str(path)) if self.viewed is not None else None
+        if self.viewed is None or seen is None:
+            return
+        if fresh := [k for k in after if k not in before and k not in seen]:
+            self.viewed[str(path)] = seen + fresh
+            self.save_viewed()
+
+    def save_viewed(self) -> None:
+        if self.viewed is not None:
+            self.viewed = {path: keys for path, keys in self.viewed.items() if Path(path).exists()}
+            config.update_state(self.config_path, steps_viewed=self.viewed)
+
+    async def action_quit(self) -> None:
+        if item := self.current_item():
+            self.mark_viewed(item)
+        await super().action_quit()
 
     def action_toggle_done(self) -> None:
         self.hide_done = not self.hide_done
@@ -1225,6 +1316,9 @@ class RumoApp(App):
         def created(title: str | None) -> None:
             if title:
                 path = items.create_idea(self.cfg.folder, title, now=datetime.now())
+                if self.viewed is not None:
+                    self.viewed[str(path)] = []
+                    self.save_viewed()
                 self.current = path.stem
                 self.horizon = "later"
                 self.reload()
@@ -1236,8 +1330,10 @@ class RumoApp(App):
         if item is None:
             return
         editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or ("notepad" if os.name == "nt" else "vi")
+        before = [seen_key(s) for s in item.steps]
         with self.suspend():
             subprocess.run([*shlex.split(editor, posix=os.name != "nt"), str(item.path)], check=False)
+        self.saw(item.path, before)
         self.reload()
 
     def action_copy_resume(self) -> None:

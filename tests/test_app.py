@@ -732,6 +732,45 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(self.pr_lines()[0], "merged web-app#12 Logout novo")
 
+    # ---------- what changed since you last looked ----------
+
+    async def test_steps_added_or_done_since_you_last_looked_are_marked_until_you_move_on(self):
+        app = self.app()
+        async with app.run_test() as pilot:  # the first run takes everything as seen
+            await pilot.pause()
+            self.assertRegex(self.row_text(app, "item:logout").splitlines()[0], r"^● +Migração auth +logout +1/2 *$")
+        self.logout.write_text(self.logout.read_text(encoding="utf-8").replace(
+            "- [ ] [manual] Pedir review\n", "- [x] [manual] Pedir review\n- [ ] [agent] Teste e2e\n"), encoding="utf-8")
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertRegex(self.row_text(app, "item:logout").splitlines()[0], r"^● +Migração auth +logout +\+1 ✓1 +2/3 *$")
+            self.assertEqual(self.shown_steps(app), [
+                "[x] [agent] Ajustar handler", "[x] [manual] Pedir review  done since you looked", "[ ] [agent] Teste e2e  new"])
+            self.assertIn("+1 ✓1 since you looked", str(app.query_one("#steps-title", Label).render()))
+            await pilot.press("down")  # moving on means you saw it
+            await pilot.pause()
+            self.assertRegex(self.row_text(app, "item:logout").splitlines()[0], r"^● +Migração auth +logout +2/3 *$")
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertEqual(self.shown_steps(app)[2], "[ ] [agent] Teste e2e")
+
+    async def test_an_item_that_appeared_since_you_last_looked_is_new_and_your_own_changes_are_not_news(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            await pilot.press("a", *"Atualizar docs", "enter")
+            await pilot.press("n", *"Ideia minha", "enter")
+            await pilot.pause()
+            self.assertRegex(self.row_text(app, self.rows(app)[0]).splitlines()[0], r"Ideia minha *$")
+        item(self.folder, "from-agent", "doing", "2026-10-11 11:00")
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertRegex(self.row_text(app, "item:from-agent").splitlines()[0], r"from-agent +new *$")
+            self.assertRegex(self.row_text(app, "item:logout").splitlines()[0], r"logout +1/3 *$")
+
     # ---------- what git has left ----------
 
     async def test_the_row_and_the_detail_say_what_git_has_left_of_the_work(self):
