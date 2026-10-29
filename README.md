@@ -12,7 +12,8 @@ Timeline, and let your AI agent sessions keep it up to date while you work.
 
 Items can belong to a **group** (a project or initiative), shown as a label with its name on its
 color; on titles and labels, color only ever means the group. One item is one line, plus its next open
-steps (2 by default, `step_lines` in the config), each saying who acts: `manual`, `agent` or `waiting`. rumo shows
+steps (2 by default, `step_lines` in the config), each saying who acts: `manual`, `agent` or `waiting`, and
+what git has left of its work (`git`). rumo shows
 one horizon at a time (`h` steps Now, Later, Past), named in a banner atop the list, in three views: the **Timeline**,
 **Projects** (one block per group) and **Repos** (one block per repository of the item's latest
 agent session). The interface is in English; the content (titles, notes, steps) is in your own
@@ -139,6 +140,13 @@ and while the Timeline is open, the GitHub CLI (`gh`, when installed and logged 
 current and adds the PRs opened from the branches the item's sessions worked on. The agent updates a
 state when it learns one, and you can add, edit, open and delete PRs in the Timeline too; a PR you
 delete is never added back. The list shows how many PRs of each item are still open.
+
+rumo also says what git has left of an item's work: files not committed and commits that no remote has,
+in the repositories and branches its sessions worked on. While the Timeline is open, it checks every
+few seconds and shows a `git` line under the item and in its detail (`web-app (main): 2 commits not
+pushed · 1 file not committed`). When several items worked on one branch, it shows on the one updated
+last. When you park or finish an item, the agent tells you too, and it never commits or pushes unless
+you ask.
 
 In a session without an item, the agent learns at the start what is in progress in that repository
 (up to three items, with their next step), so it can answer "what is left?"; `rumo now` lists

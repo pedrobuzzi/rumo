@@ -26,7 +26,7 @@ from textual.screen import ModalScreen
 from textual.widgets import Input, Label, ListItem, ListView, Markdown, OptionList, SelectionList, Static
 from textual.widgets.option_list import Option
 
-from rumo import config, items, prs
+from rumo import config, git, items, prs
 from rumo.items import Item, WriteConflict
 
 # Color only ever means the group, so a status is a shape: full when active, empty when not started.
@@ -76,6 +76,8 @@ PR_KEYS = [  # while the PRs list has focus
 PR_COLORS = {"open": config.PALETTE["green"], "draft": "dim", "merged": config.PALETTE["purple"],
              "closed": config.PALETTE["red"], "": "dim"}
 PR_CHECK_SECONDS = 600  # how often gh is asked about the PRs while the TUI is open
+GIT_CHECK_SECONDS = 10  # how often git is asked what is left in the items' repositories (local, cheap)
+GIT_STYLE = "yellow"  # what git has left is yours to commit or push, like a manual step
 
 
 def status_text(status: str, label: str | None = None) -> Text:
@@ -504,9 +506,12 @@ class RumoApp(App):
         Binding("escape", "clear_filter", "clear filter", show=False),
     ]
 
-    def __init__(self, config_path: Path | None = None, today: date | None = None, gh: prs.Run | None = None) -> None:
+    def __init__(self, config_path: Path | None = None, today: date | None = None, gh: prs.Run | None = None,
+                 run_git: git.Run | None = None) -> None:
         super().__init__()
         self.gh = gh  # asks GitHub about the PRs in the background; None leaves the states as written
+        self.run_git = run_git  # asks git what is left in the items' repositories; None says nothing
+        self.git_left: dict[str, list[git.Pending]] = {}  # item slug -> what git has left of its work
         self.config_path = config_path or config.default_path()
         self.cfg = config.load(self.config_path)
         self.today = today
@@ -550,6 +555,9 @@ class RumoApp(App):
         if self.gh is not None:
             self.check_prs()
             self.set_interval(PR_CHECK_SECONDS, self.check_prs)
+        if self.run_git is not None:
+            self.check_git()
+            self.set_interval(GIT_CHECK_SECONDS, self.check_git)
 
     def check_prs(self) -> None:
         self.run_worker(self.ask_about_prs, thread=True, exclusive=True, group="prs", exit_on_error=False)
@@ -568,6 +576,23 @@ class RumoApp(App):
                 prs.refresh(item, prs.noted_branches(state, key), prs.dropped(state, key), self.gh, asked)
             except Exception:  # one odd item must not stop the others
                 continue
+
+    def check_git(self) -> None:
+        self.run_worker(self.ask_git, thread=True, exclusive=True, group="git", exit_on_error=False)
+
+    def ask_git(self) -> None:
+        """In a thread: what git has left in the repositories of the items on the timeline (not the older Past)."""
+        if self.run_git is None:
+            return
+        tl = items.timeline(list(self.items.values()), today=self.today)
+        left = git.pending([*tl.now, *tl.later, *tl.past], config.load_state(self.config_path), self.run_git)
+        if left != self.git_left:
+            self.call_from_thread(self.show_git, left)
+
+    def show_git(self, left: dict[str, list[git.Pending]]) -> None:
+        self.git_left = left
+        self.build_timeline()
+        self.show_detail()
 
     # ---------- data ----------
 
@@ -746,7 +771,7 @@ class RumoApp(App):
 
     def row(self, item: Item, label: bool) -> Table:
         """Symbol, project label, title and progress (or the date in Past) on one line; below, the next open
-        steps (`step_lines` of them at most), each saying who acts."""
+        steps (`step_lines` of them at most), each saying who acts, then what git has left of the work."""
         group = self.cfg.groups.get(item.group)
         grid = Table.grid(padding=(0, 1), expand=True)
         grid.add_column(width=1, no_wrap=True)
@@ -766,9 +791,10 @@ class RumoApp(App):
         pr_cells = [Text(plural(open_prs, "PR"), "dim")] if open_prs else []
         grid.add_row(symbol, *([self.label(group)] if label else []), title, *pr_cells, Text(right, "dim"))
         pending = [s for s in item.steps if not s.done] if item.status != "done" else []
-        for n, step in enumerate(pending[: self.cfg.step_lines]):
-            line = Text.assemble(("↳ " if n == 0 else "  ", "dim"),
-                                 (f"{step.kind:<{KIND_WIDTH}}", KIND_STYLES.get(step.kind, "dim")), (step.text, "dim"))
+        below = [(step.kind, KIND_STYLES.get(step.kind, "dim"), step.text) for step in pending[: self.cfg.step_lines]]
+        below += [("git", GIT_STYLE, left.label) for left in self.git_left.get(item.slug, [])]
+        for n, (who, style, text) in enumerate(below):
+            line = Text.assemble(("↳ " if n == 0 else "  ", "dim"), (f"{who:<{KIND_WIDTH}}", style), (text, "dim"))
             grid.add_row("", *([""] if label else []), line, *[""] * len(pr_cells), "")
         return grid
 
@@ -863,6 +889,8 @@ class RumoApp(App):
                 line.append(tag + " ", "" if tag in self.cfg.tags else "dim")
         if updated := item.meta.get("updated"):
             line.append(f"   updated {updated}", "dim")
+        for left in self.git_left.get(item.slug, []):
+            line.append_text(Text.assemble("\n", ("git  ", GIT_STYLE), left.label))
         header.update(line)
 
         parts = []

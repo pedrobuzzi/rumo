@@ -23,6 +23,8 @@ there). Never read environment variables yourself; the index has what you need. 
 - `folder`, `config`, `language`, `tags`, `groups` (with colors) and `colors` (the palette).
 - `now`: the time to write in `created`, `updated` and `done`.
 - `session` and `linked`: this session's id, and the items it already keeps updated (`-` for none).
+- `git-left`: what git has left of the linked items' work, files not committed and commits no remote
+  has (`-` for nothing).
 - `session-line`: the line that links this session to an item. Append it to the item's `## Sessions`.
   - **Full mode**: `session` is an id (Claude Code). Sessions can be linked and resumed.
   - **Simple mode**: `session: none` (another agent, or an old Claude Code). `new`, `idea`, `now`,
@@ -119,14 +121,16 @@ Works in any session, linked or not.
    stop for now).
 2. Make sure the Steps tell someone with no context how to resume: every pending piece of work is a
    step and the next action is the first open one (for `waiting`, a `[waiting]` step naming who or what). Set Left off to one line: the blocker, or why it
-   stops here.
+   stops here. If `git-left` is not `-`, say what it is and keep a step for it; never commit or push
+   unless the user asks.
 3. Set the status and `updated`, then append ` | closed` to **this session's** line in Sessions.
 
 ### done
 In simple mode, ask which item to finish (from `rumo now`), since no item is linked.
 1. Before changing anything, ask in one message: for each unchecked step, whether it is done, dropped
    (delete it) or stays (then the item is not finished); for each PR not merged or closed, its state
-   now; and whether to finish the item.
+   now; what `git-left` says, if anything (files not committed or commits not pushed usually mean the
+   work is not finished; never commit or push unless the user asks); and whether to finish the item.
 2. Only after an explicit yes: set `status: done`, add `done: <now>`, update `updated`, and (full mode)
    append ` | closed` to this session's line.
 

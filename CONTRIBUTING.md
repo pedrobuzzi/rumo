@@ -6,7 +6,10 @@
 src/rumo/items.py        reading and writing items, the Timeline, the agent index
 src/rumo/config.py       config file, per-OS location, system language
 src/rumo/app.py          the Timeline TUI (Textual)
-src/rumo/hook.py         Claude Code UserPromptSubmit hook (stdlib only, runs on every prompt)
+src/rumo/hook.py         Claude Code hooks: SessionStart, UserPromptSubmit, Stop (stdlib only)
+src/rumo/prs.py          an item's PRs, found and kept current through the GitHub CLI
+src/rumo/git.py          what git has left of an item's work (files not committed, commits not pushed)
+src/rumo/sessions.py     the Claude Code sessions digested for `/rumo sessions`
 src/rumo/cli.py          the `rumo` command
 skills/rumo/SKILL.md     the /rumo skill (Claude Code plugin and `npx skills add`)
 hooks/hooks.json         the plugin hook

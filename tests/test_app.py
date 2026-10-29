@@ -732,6 +732,31 @@ class AppTest(unittest.IsolatedAsyncioTestCase):
             await pilot.pause()
             self.assertEqual(self.pr_lines()[0], "merged web-app#12 Logout novo")
 
+    # ---------- what git has left ----------
+
+    async def test_the_row_and_the_detail_say_what_git_has_left_of_the_work(self):
+        repo = self.root / "web-app"
+        (repo / ".git").mkdir(parents=True)
+        (repo / ".git" / "HEAD").write_text("ref: refs/heads/main\n", encoding="utf-8")
+        text = self.logout.read_text(encoding="utf-8")
+        self.logout.write_text(text + f"\n## Sessions\n- 2026-10-11 09:00 | web-app (main) | abc | {repo}\n", encoding="utf-8")
+        answers = {"remote": "origin\n", "rev-list": "2\n", "status": " M a.py\n?? b.py\n"}
+        app = RumoApp(config_path=self.config, today=TODAY, run_git=lambda root, args: answers.get(args[0]))
+        async with app.run_test() as pilot:
+            await app.workers.wait_for_complete()
+            await pilot.pause()
+            left = "web-app (main): 2 commits not pushed · 2 files not committed"
+            lines = [line.strip() for line in self.row_text(app, "item:logout", width=100).splitlines()]
+            self.assertEqual(lines[1:], ["↳ manual  Pedir review", f"git     {left}"])
+            self.assertIn(f"git  {left}", str(app.query_one("#header", Static).render()))
+            self.assertEqual(len(self.row_text(app, "item:waiting-infra").splitlines()), 1)
+
+    async def test_without_git_checks_nothing_is_said(self):
+        app = self.app()
+        async with app.run_test() as pilot:
+            await pilot.pause()
+            self.assertNotIn("git", self.row_text(app, "item:logout"))
+
     async def test_picks_up_changes_made_on_disk(self):
         app = self.app()
         async with app.run_test() as pilot:

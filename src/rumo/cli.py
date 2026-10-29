@@ -30,10 +30,10 @@ def main(argv: list[str] | None = None) -> None:
 
     # Late imports: `rumo hook` runs on every prompt and must not pay for Textual.
     if command == "":
-        from rumo import prs
+        from rumo import git, prs
         from rumo.app import RumoApp
 
-        RumoApp(gh=prs.gh()).run()
+        RumoApp(gh=prs.gh(), run_git=git.run).run()
     elif command == "hook":
         from rumo.hook import main as hook
 
@@ -65,15 +65,15 @@ def main(argv: list[str] | None = None) -> None:
 
 def _index(rest: list[str]) -> None:
     """`rumo index [<folder>]`: everything the agent needs in one call. Where items live, the content
-    language, tags, groups, the time, this session, the items it keeps updated and the line that links
-    it to another one, then the items.
+    language, tags, groups, the time, this session, the items it keeps updated, what git has left of their
+    work and the line that links it to another one, then the items.
 
     The folder is where the session started (by default the current one): `claude --resume` only finds
     the session from there.
     """
     from datetime import datetime
 
-    from rumo import config, items
+    from rumo import config, git, items
 
     cfg = config.load()
     all_items = items.list_items(cfg.folder)
@@ -87,7 +87,10 @@ def _index(rest: list[str]) -> None:
     print(f"# now: {datetime.now():%Y-%m-%d %H:%M}")
     if session:
         print(f"# session: {session}")
-        print(f"# linked: {', '.join(i.slug for i in all_items if i.linked_to(session)) or '-'}")
+        linked = [i for i in all_items if i.linked_to(session)]
+        print(f"# linked: {', '.join(i.slug for i in linked) or '-'}")
+        left = git.pending(linked, config.load_state(cfg.path)) if linked else {}
+        print(f"# git-left: {'; '.join(p.label for found in left.values() for p in found) or '-'}")
         print(f"# session-line: {_session_line(session, rest[0] if rest else os.getcwd())}")
     else:
         print("# session: none (simple mode: sessions can't be linked)")

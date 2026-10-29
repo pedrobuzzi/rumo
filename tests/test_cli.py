@@ -39,6 +39,16 @@ class AgentCommandsTest(unittest.TestCase):
         self.assertIn("# linked: 2026-10-11-migracao\n", out)
         self.assertIn("# linked: -\n", self.rumo("index", session="parked-session").stdout)
 
+    def test_index_says_what_git_has_left_of_the_linked_items_work(self):
+        self.assertIn("# git-left: -\n", self.rumo("index", session="open-session").stdout)
+        repo = self.root / "web-app"
+        subprocess.run(["git", "init", "-q", "-b", "main", str(repo)], check=True)
+        (repo / "draft.py").write_text("x", encoding="utf-8")
+        (self.folder / "2026-10-12-pix.md").write_text(
+            f"---\ntitle: Pix\nstatus: doing\n---\n\n## Sessions\n- 2026-10-12 10:00 | web-app (main) | s1 | {repo}\n",
+            encoding="utf-8")
+        self.assertIn("# git-left: web-app (main): 1 file not committed\n", self.rumo("index", session="s1").stdout)
+
     def test_index_gives_the_time_to_stamp_changes_with(self):
         self.assertRegex(self.rumo("index").stdout, r"\n# now: \d{4}-\d\d-\d\d \d\d:\d\d\n")
 
