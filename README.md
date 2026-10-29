@@ -123,7 +123,9 @@ happened. If a turn did work and no linked item changed, the plugin reminds the 
 ends. Open steps are never deleted unless you ask, so half-done work stays in Now. One session can
 follow several topics: when you start something no linked item covers, the agent asks once whether to
 track it as a new item, add it as a step, or leave it out. Left off is one line and Context at most
-three. `/clear` starts a new, unlinked session; `claude --resume <id>` picks the old one up again.
+three. After a compaction, even one in the middle of a turn, and when a session is resumed, the agent
+gets its items back at once. `/clear` starts a new, unlinked session; `claude --resume <id>` picks the
+old one up again.
 
 You can add, edit, move, check and delete steps in the Timeline too. On your next message, a linked
 session is told which steps changed since its last answer, so it neither redoes nor re-adds them, and

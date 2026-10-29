@@ -305,8 +305,8 @@ class StopHookTest(unittest.TestCase):
             encoding="utf-8",
         )
 
-    def session_start(self, session: str, cwd: Path) -> str:
-        payload = {"session_id": session, "hook_event_name": "SessionStart", "source": "startup", "cwd": str(cwd)}
+    def session_start(self, session: str, cwd: Path, source: str = "startup") -> str:
+        payload = {"session_id": session, "hook_event_name": "SessionStart", "source": source, "cwd": str(cwd)}
         result = subprocess.run([sys.executable, "-m", "rumo.cli", "hook"], input=json.dumps(payload),  # run where the session is
                                 capture_output=True, text=True, encoding="utf-8", env=self.env, cwd=cwd)
         self.assertEqual(result.returncode, 0, result.stderr)
@@ -361,8 +361,18 @@ class StopHookTest(unittest.TestCase):
         self.assertNotIn("Blank", message)
         self.assertNotIn("Relative", message)
 
-    def test_session_start_is_silent_when_linked_or_with_nothing_in_progress(self):
-        self.assertEqual(self.session_start("open-session", self.root), "")  # the prompt reminder covers it
+    def test_a_linked_session_gets_its_items_back_right_after_a_compaction_or_a_resume(self):
+        # Compaction can happen mid-turn, long before the next prompt brings the reminder.
+        compacted = self.session_start("open-session", self.root, source="compact")
+        self.assertIn("compacted", compacted)
+        resumed = self.session_start("open-session", self.root, source="resume")
+        self.assertNotIn("compacted", resumed)
+        for message in (compacted, resumed):
+            self.assertIn("2026-10-11-migração.md (status: waiting)", message)
+            self.assertIn("Open steps: [manual] Pedir review da PR", message)
+            self.assertIn("Never delete an open step", message)
+
+    def test_session_start_is_silent_with_nothing_in_progress(self):
         self.item.unlink()
         self.assertEqual(self.session_start("new-session", self.root), "")
 

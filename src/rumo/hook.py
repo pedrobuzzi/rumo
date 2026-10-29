@@ -3,7 +3,7 @@
 The plugin sends three events to `rumo hook`:
 
 - SessionStart: a session without an item learns what is in progress in its repository, so it can
-  answer "what is left?" (see `session_start`).
+  answer "what is left?"; a linked one, compacted or resumed, gets its items back (see `session_start`).
 - UserPromptSubmit: remind a linked session of its items and the update rules. The link is the
   session id written in an item's Sessions section (by `/rumo new` or `/rumo link`). A line
   ending in `| closed` (from park/unlink) no longer links, and after `/clear` the id changes, so
@@ -174,10 +174,13 @@ def outside_changes(item: items.Item, before: object) -> str:
 
 
 def session_start(cfg: config.Config, session_id: str, payload: dict) -> str:
-    """Tell a session without an item what is in progress here, so "what is left?" has an answer."""
+    """Tell a session without an item what is in progress here, so "what is left?" has an answer. A linked
+    session (compacted or resumed) gets its items back at once: compaction can happen mid-turn, and the
+    agent would go on without them until the next prompt."""
     every = items.list_items(cfg.folder)
     if any(item.linked_to(session_id) for item in every):
-        return ""  # linked (a resumed session): the prompt reminder already lists its steps
+        compacted = "The conversation was just compacted; your rumo items still stand. " if payload.get("source") == "compact" else ""
+        return compacted + reminder(cfg, session_id)
     in_progress = items.timeline(every).now
     if not in_progress:
         return ""
