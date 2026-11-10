@@ -81,5 +81,65 @@ class AgentCommandsTest(unittest.TestCase):
         self.assertTrue(self.session_line(notes).endswith(f"| notes (-) | s1 | {notes}"))
 
 
+DROPPED = """---
+title: Controle de ponto pra obra
+status: dropped
+dropped: 2026-10-02 18:00
+updated: 2026-10-02 18:00
+---
+
+## Left off
+Mestres de obra não pagam por app; o dono da obra já usa planilha.
+"""
+
+
+class IdeaCommandTest(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.folder = self.root / "items"
+        self.folder.mkdir()
+        (self.folder / "2026-09-17-controle-de-ponto-pra-obra.md").write_text(DROPPED, encoding="utf-8")
+        config = self.root / "config.toml"
+        config.write_text('[groups.produtos]\nname = "Produtos"\ncolor = "cyan"\n', encoding="utf-8")
+        self.env = {**os.environ, "RUMO_DIR": str(self.folder), "RUMO_CONFIG": str(config)}
+
+    def rumo(self, *args: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, "-m", "rumo.cli", *args], capture_output=True, text=True,
+                              encoding="utf-8", env=self.env)
+
+    def test_notes_an_idea_and_names_a_similar_dropped_one_with_its_reason(self):
+        done = self.rumo("idea", "Ponto eletrônico pra obra", "--group", "produtos")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        lines = done.stdout.splitlines()
+        path = Path(lines[0])
+        self.assertTrue(path.is_file())
+        text = path.read_text(encoding="utf-8")
+        self.assertIn("title: Ponto eletrônico pra obra\nstatus: idea\ngroup: produtos\n", text)
+        self.assertEqual(lines[1:], ["similar: Controle de ponto pra obra (dropped: Mestres de obra não pagam por app; "
+                                     "o dono da obra já usa planilha.)"])
+
+    def test_an_unrelated_idea_lists_nothing_similar(self):
+        done = self.rumo("idea", "Tradutor de cardápio")
+        self.assertEqual(len(done.stdout.splitlines()), 1)
+
+    def test_without_a_title_or_with_an_unknown_group_it_shows_the_usage(self):
+        for args in (("idea",), ("idea", "  "), ("idea", "X", "--group", "nope"), ("idea", "X", "--group")):
+            done = self.rumo(*args)
+            self.assertEqual(done.returncode, 2, args)
+            self.assertIn("usage: rumo idea", done.stderr)
+        self.assertEqual(len(list(self.folder.glob("*.md"))), 1)
+
+    def test_a_flag_is_never_taken_as_a_title(self):
+        helped = self.rumo("idea", "--help")
+        self.assertEqual(helped.returncode, 0)
+        self.assertIn("usage: rumo idea", helped.stdout)
+        self.assertEqual(self.rumo("idea", "-x").returncode, 2)
+        self.assertEqual(len(list(self.folder.glob("*.md"))), 1)
+
+    def test_the_help_lists_it(self):
+        self.assertIn('rumo idea "<title>"', self.rumo("--help").stdout)
+        self.assertNotIn("spark", self.rumo("--help").stdout)  # the Timeline runs it, on `*`
+
+
 if __name__ == "__main__":
     unittest.main()

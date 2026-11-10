@@ -10,12 +10,14 @@ src/rumo/hook.py         Claude Code hooks: SessionStart, UserPromptSubmit, Stop
 src/rumo/prs.py          an item's PRs, found and kept current through the GitHub CLI
 src/rumo/git.py          what git has left of an item's work (files not committed, commits not pushed)
 src/rumo/sessions.py     the Claude Code sessions digested for `/rumo sessions`
+src/rumo/explore.py      `?` and `rumo explore`: asks `claude -p` (or keep-digging) about an item, in the background
+src/rumo/spark.py        `*` and `rumo spark`: new ideas from the ones you have, kept in spark.json until you decide
 src/rumo/cli.py          the `rumo` command
 skills/rumo/SKILL.md     the /rumo skill (Claude Code plugin and `npx skills add`)
 hooks/hooks.json         the plugin hook
 .claude-plugin/          plugin manifest and the marketplace that serves this repo
 scripts/                 version bump, Homebrew formula generator and tap updater
-docs/specs/              specs: rumo-v1.md (the tool), rumo-distribution.md (how it ships)
+docs/specs/              specs: rumo-v1.md (the tool), rumo-distribution.md (how it ships), rumo-ideas.md (ideas, families, explorations), rumo-spark.md (`*`)
 ```
 
 ## Develop

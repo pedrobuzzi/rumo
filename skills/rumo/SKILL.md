@@ -1,8 +1,8 @@
 ---
 name: rumo
-description: Organize the user's local work items (past, now, later) with rumo. Creates items from the session, notes ideas, links this session to an item, adds steps, parks or finishes it, and catches up on recent sessions. Requires the rumo CLI.
+description: Organize the user's local work items (past, now, later) with rumo. Creates items from the session, notes ideas and facts, links this session to an item, adds steps, parks, drops or finishes it, reviews idle ideas, and catches up on recent sessions. Requires the rumo CLI.
 disable-model-invocation: true
-argument-hint: "[new | idea <text> | link [item] | now | find <text> | status | step <text> | park [reason] | done | unlink | sessions [7d]]"
+argument-hint: "[new | idea <text> | note <text> | link [item] | now | find <text> | status | step <text> | park [reason] | drop [reason] | done | unlink | ideas [30d] | sessions [7d]]"
 allowed-tools: Bash(rumo:*)
 ---
 
@@ -11,14 +11,17 @@ allowed-tools: Bash(rumo:*)
 Arguments: `$ARGUMENTS`
 
 rumo keeps one Markdown file per piece of work (an **item**) in a local folder. The user sees them in
-the rumo app (`rumo` in a terminal): **Past** (done), **Now** (doing, waiting), **Later** (idea, paused).
+the rumo app (`rumo` in a terminal): **Past** (done, dropped), **Now** (doing, waiting), **Later** (idea, paused).
+An item may come from another one (`from: <slug>`): an idea that came up while working on it, or a step
+that became an item of its own.
 
 ## 0. Always start here
 
 Run `rumo index '<DIR>'`, where `<DIR>` is the **original working directory of this session** (where
 `claude` was started, not the shell's current folder: `claude --resume` only finds the session from
 there). Never read environment variables yourself; the index has what you need. It prints
-`# key: value` lines, then one line per item: `slug | status | title | group | tags | left off`.
+`# key: value` lines, then one line per item: `slug | status | title | group | tags | from | idle | left off`
+(`idle: <N>d` is how long an idea has not changed; a dropped item's Left off is why it was dropped).
 
 - `folder`, `config`, `language`, `tags`, `groups` (with colors) and `colors` (the palette).
 - `now`: the time to write in `created`, `updated` and `done`.
@@ -27,9 +30,10 @@ there). Never read environment variables yourself; the index has what you need. 
   has (`-` for nothing).
 - `session-line`: the line that links this session to an item. Append it to the item's `## Sessions`.
   - **Full mode**: `session` is an id (Claude Code). Sessions can be linked and resumed.
-  - **Simple mode**: `session: none` (another agent, or an old Claude Code). `new`, `idea`, `now`,
-    `find`, `step` and `done` work without a Sessions section; `link`, `status`, `park`, `unlink` and
-    `sessions` need Claude Code with the rumo plugin, so say so. The menu shows only `new`, `idea`, `now`, `find`.
+  - **Simple mode**: `session: none` (another agent, or an old Claude Code). `new`, `idea`, `note`, `now`,
+    `find`, `step`, `drop`, `done` and `ideas` work without a Sessions section; `link`, `status`, `park`,
+    `unlink` and `sessions` need Claude Code with the rumo plugin, so say so. The menu shows only `new`,
+    `idea`, `now`, `find`, `ideas`.
   - No `session` line: the CLI is older than the plugin. Work in simple mode and tell the user to
     upgrade it (`brew upgrade rumo`, `uv tool upgrade rumo-cli` or `pipx upgrade rumo-cli`).
 
@@ -37,8 +41,8 @@ If `rumo` is not found, stop and tell the user to install it, then run `/rumo` a
 `uv tool install rumo-cli` or `pipx install rumo-cli` (macOS, Linux, Windows), or
 `brew install pedrobuzzi/tap/rumo` (macOS, Linux).
 
-Write item content (title, Left off, Context, steps) in the configured `language`; keep the structure
-(frontmatter keys, section names, statuses, tags, `[agent]`/`[manual]`/`[waiting]`) in English. Follow "Writing an
+Write item content (title, Left off, Context, notes, steps) in the configured `language`; keep the structure
+(frontmatter keys, section names, statuses, tags, `[agent]`/`[manual]`/`[waiting]`/`[item]`) in English. Follow "Writing an
 item" every time you create or change an item.
 
 ## 1. No subcommand: show the menu
@@ -52,22 +56,26 @@ conversation so far.
   3. `link [item]`: continue an existing item in this session
   4. `now`: list what is in progress, with the next step of each
   5. `find <text>`: search past, current and future items
-  6. `sessions`: catch up on the sessions open or recent, creating or updating their items
+  6. `ideas`: review the ideas idle for a month: keep, drop, start, merge
+  7. `sessions`: catch up on the sessions open or recent, creating or updating their items
 - Session **linked** (name the item or items):
   1. `status`: show Left off and the next steps
   2. `step <text>`: add a step
-  3. `new`: track another topic of this session as its own item (both stay linked)
-  4. `park [reason]`: pause it with an accurate Left off and stop updating it here
-  5. `done`: finish it (checks the steps, asks you first)
-  6. `unlink`: stop updating it from this session
-  7. `sessions`: catch up on the sessions open or recent, creating or updating their items
+  3. `note <text>`: keep a fact learned (a conversation, a price, a number) under Notes
+  4. `new`: track another topic of this session as its own item (both stay linked)
+  5. `park [reason]`: pause it with an accurate Left off and stop updating it here
+  6. `drop [reason]`: stop it for good, keeping why
+  7. `done`: finish it (checks the steps, asks you first)
+  8. `unlink`: stop updating it from this session
+  9. `sessions`: catch up on the sessions open or recent, creating or updating their items
 
 ## 2. Subcommands
 
 ### new
 1. **Look for similar items first.** From the index, pick up to 3 items about the same subject or
-   goal (wording may differ), favoring `idea` and `paused`. If any, show them (title, status, slug)
-   and ask: **promote/continue** one of them, or **create a new** item.
+   goal (wording may differ), favoring `idea` and `paused`. If any, show them (title, status, slug,
+   and for a `dropped` one the reason, its Left off) and ask: **promote/continue** one of them, or
+   **create a new** item.
    - Promote/continue: do what `link` does, set `status: doing` if it was `idea`/`paused`/`waiting`,
      and bring its Steps up to date with the conversation.
 2. Otherwise create `<folder>/YYYY-MM-DD-<slug>.md` (today; slug from the title in kebab-case without
@@ -80,11 +88,22 @@ conversation so far.
    park or unlink", or (simple mode) "update it with /rumo or in the rumo app".
 
 ### idea <text>
-1. Check the index for a similar item. If one exists, show it and ask whether to still create.
+1. Check the index for a similar item. If one exists, show it and ask whether to still create. For a
+   `dropped` one, say why it was dropped (its Left off), so a dead idea is not rediscovered unexamined.
 2. Create a small item: frontmatter only (`title`, `status: idea`, `tags`, `created`, `updated`), plus
-   `## Context` only if the user gave detail. Do **not** link this session.
+   `## Context` only if the user gave detail. When this session keeps exactly one item updated, add
+   `from: <its slug>` (the idea came up while working on it); with several linked, ask which, or none.
+   Do **not** link this session.
 3. **Suggest a group** (see "Groups"), in one short question.
 4. Confirm in one line and go back to what we were doing.
+
+### note <text>
+Keep a fact the user learned: a conversation, a price, a number, an answer from a client.
+1. **Pick the item** as `step` does: the linked one, the one the note belongs to, or ask.
+2. Append `- YYYY-MM-DD <text>` to `## Notes` (create it after Context, or after Left off when there is
+   no Context), in the configured language, and update `updated`. Notes are facts the user checked:
+   never reword or drop one, and never write your own opinions there.
+3. Confirm in one line.
 
 ### link [item]
 1. With an argument, find the item by slug or title. Without one, suggest up to 3 items similar to
@@ -125,17 +144,58 @@ Works in any session, linked or not.
    unless the user asks.
 3. Set the status and `updated`, then append ` | closed` to **this session's** line in Sessions.
 
+### drop [reason]
+The item will not be done: an idea that does not hold, work that lost its point.
+1. **Pick the item**: the linked one, or ask (from the index, favoring `idea` and `paused`).
+2. Without a reason, ask for one in one line: it is what stops the same idea from coming back
+   unexamined. Never drop without one.
+3. Set `status: dropped`, add `dropped: <now>` (remove `done:` if there), replace `## Left off` with the
+   reason in one line, update `updated`, and (full mode) append ` | closed` to this session's line.
+4. Confirm in one line. A dropped item shows in Past for 14 days and stays searchable.
+
 ### done
 In simple mode, ask which item to finish (from `rumo now`), since no item is linked.
 1. Before changing anything, ask in one message: for each unchecked step, whether it is done, dropped
    (delete it) or stays (then the item is not finished); for each PR not merged or closed, its state
    now; what `git-left` says, if anything (files not committed or commits not pushed usually mean the
    work is not finished; never commit or push unless the user asks); and whether to finish the item.
+   In the same message, offer the open steps that will not be done now as ideas of their own (each
+   linked back with `from:`), and suggest up to three ideas that came up in this work (one line each,
+   with why), all created only if the user picks them.
 2. Only after an explicit yes: set `status: done`, add `done: <now>`, update `updated`, and (full mode)
-   append ` | closed` to this session's line.
+   append ` | closed` to this session's line. Create the ideas the user picked the way `idea` does,
+   with `from:` this item, its group and its tags.
 
 ### unlink
 Append ` | closed` to this session's line. Nothing else changes.
+
+### ideas [period]
+Reviews the ideas that went cold, so Later holds only what is still meant.
+1. From the index, take the items with `status: idea` (and `paused`) and `idle` over 30 days, or over
+   the period given (`60d`). Read the files you need with Read (Context, Notes, the latest
+   Explorations entry, Left off). Ideas with the Left off "Sugestão da IA … ainda não triada" were
+   never looked at: list them apart, to triage one by one.
+2. Show one plan, one line per idea, in the configured language, then stop and wait:
+
+   ```
+   7 ideas idle for more than 30 days
+
+    1. Controle de ponto pra obra (64d) · keep: two foremen sent photos of their sheets last week
+    2. App de cardápio (91d) · drop: "the restaurants we asked use WhatsApp" (from its Notes)
+    3. Agenda de manicure (45d) · start: the validation test is ready, only the calls are left
+    4. Lembrete de vacina + Pet carteira (40d) · merge into Pet carteira: same buyer, same app
+    5. Ponto eletrônico (38d) · ask again: the competitors answer is from before the price change
+   Not triaged: 2 (one by one after this)
+
+   Apply? yes · "without 2" · "3 stays an idea" · no
+   ```
+
+   Options per idea: keep (touch `updated` so it leaves the review), drop (with the reason you would
+   write), start (`status: doing`, with a first step), merge (move its Context and Notes into the
+   other item, then drop it with "merged into <title>"), ask again (suggest the `?` lens or question in
+   the rumo app; this skill never runs explorations).
+3. Write nothing before the answer. On a yes or adjustments, apply each line the way `drop`, `idea`
+   and `step` do, then confirm in one line.
 
 ### sessions [period]
 Catches up, from any session, on the Claude Code sessions open or active since the last review.
@@ -211,7 +271,11 @@ else stays short.
 - **PRs go under `## PRs`**, one per line: `- [open] <link> <short title>` (states: `open`, `draft`,
   `merged`, `closed`). rumo adds the PRs a linked session opens and, with `gh`, the ones opened from
   its branches. Add one the user gives you, and update a state when you learn it (`gh pr view <link>`).
-- Conversation-only replies need no update. Never add other sections.
+- **Notes** are the user's facts, `- YYYY-MM-DD <text>`, added with `note`. **Explorations** are written
+  by the rumo app (`?`): read them, never edit them, and do not add entries yourself.
+- **A step that became an item** reads `- [ ] [item] <text> → <slug>`: rumo checks it when that item is
+  done. Do not check, edit or delete it yourself; work on the item it points to.
+- Conversation-only replies need no update. Never add sections other than the ones in the format below.
 
 ## Several topics in one session
 
@@ -250,6 +314,7 @@ user content: name them in the configured language. After creating or promoting 
 title: <short title, in the configured language>
 status: doing
 group: <group key from the index, optional>
+from: <slug of the item this one came from, optional>
 tags: [bug, frontend]
 created: 2026-10-11 10:08
 updated: 2026-10-11 16:30
@@ -261,20 +326,31 @@ updated: 2026-10-11 16:30
 ## Context
 <at most 3 short lines: what this is and why it matters>
 
+## Notes
+- 2026-10-11 <a fact the user learned>
+
 ## Steps
 - [x] [agent] <done: one short line, starting with a verb>
 - [ ] [agent] <the next action>
 - [ ] [manual] <what the user does>
 - [ ] [waiting] <who or what the item waits on>
+- [ ] [item] <a step that became an item> → <its slug>
 
 ## PRs
 - [open] https://github.com/acme/web-app/pull/42 <short title>
+
+## Explorations
+### 2026-10-11 14:10 <a question asked in the rumo app>
+<!-- rumo:exploration id=3f2a state=done -->
+<the answer>
 
 ## Sessions
 - 2026-10-11 10:08 | web-app (main) | <session id> | /absolute/path
 ```
 
-- Statuses: `idea`, `doing`, `waiting`, `paused`, `done`. `done: <date time>` exists only while done.
+- Statuses: `idea`, `doing`, `waiting`, `paused`, `done`, `dropped`. `done: <date time>` exists only while
+  done, `dropped: <date time>` only while dropped (its Left off is the reason).
+- Every section is optional; keep this order. `from:` names the parent by the slug the index prints.
 - Timestamps: `YYYY-MM-DD HH:MM`, local time: `now` in the index, or `date '+%Y-%m-%d %H:%M'` in a later response.
 - Sessions: append only. ` | closed` at the end of a line means that session no longer updates the item.
 

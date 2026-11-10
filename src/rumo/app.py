@@ -23,26 +23,28 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import ModalScreen
+from textual.screen import ModalScreen, Screen
 from textual.widgets import Input, Label, ListItem, ListView, Markdown, OptionList, SelectionList, Static
 from textual.widgets.option_list import Option
 
-from rumo import config, git, items, prs
+from rumo import config, explore, git, items, prs, spark
 from rumo.items import Item, WriteConflict
 
 # Color only ever means the group, so a status is a shape: full when active, empty when not started.
-SHAPES = {"doing": "●", "waiting": "◐", "idea": "○", "paused": "◌", "done": "✓"}
+SHAPES = {"doing": "●", "waiting": "◐", "idea": "○", "paused": "◌", "done": "✓", "dropped": "✕"}
 # Who acts on a step, in the list and in the detail: what is yours stands out, the agent's stays quiet.
 KIND_STYLES = {"manual": "yellow", "agent": "dim", "waiting": "cyan"}
 KIND_WIDTH = max(map(len, items.KINDS)) + 1  # the step texts under an item line up
-VIEWS = {"timeline": "Timeline", "projects": "Projects", "repos": "Repos"}
+VIEWS = {"timeline": "Timeline", "projects": "Projects", "repos": "Repos", "tree": "Tree"}
 HORIZONS: tuple[str, ...] = ("past", "now", "later")
+HORIZON_OF = {"doing": "now", "waiting": "now", "idea": "later", "paused": "later", "done": "past", "dropped": "past"}
 CYCLE = ("now", "later", "past")  # what `h` steps through, starting where rumo opens
 HORIZON_SAYS = {
     "now": "doing and waiting",
     "later": "ideas and paused work",
-    "past": f"done in the last {items.PAST_WINDOW_DAYS} days",
+    "past": f"done and dropped in the last {items.PAST_WINDOW_DAYS} days",
 }
+IDLE_FADE_DAYS = 60  # an idea untouched this long fades in the list: time to decide
 UNGROUPED = "-"  # the "No group" or "No repo" block, which always comes last
 MAX_LABEL = 16  # the project label fits the longest group name up to this many characters
 NEW_GROUP = "+new"
@@ -63,16 +65,18 @@ def key_line(keys: list[tuple[str, str]], width: int = 0) -> Text:
 
 KEYS = [
     ("v", "view"), ("h", "now/later/past"), ("s", "status"), ("g", "group"), ("t", "tags"), ("n", "new idea"),
-    ("a", "add step"), ("p", "add PR"), ("tab", "steps"), ("x", "hide done"), ("e", "edit"), ("c", "copy resume"),
+    ("b", "branch"), ("?", "ask"), ("*", "spark"), ("a", "add step"), ("p", "add PR"), ("tab", "steps"), ("x", "hide done"), ("e", "edit"), ("c", "copy resume"),
     ("/", "filter"), ("q", "quit"),
 ]
 STEP_KEYS = [  # while the Steps list has focus
-    ("a", "add"), ("enter", "edit"), ("shift+↑↓", "move"), ("d", "delete"), ("space", "check"),
+    ("a", "add"), ("b", "to item"), ("enter", "edit"), ("shift+↑↓", "move"), ("d", "delete"), ("space", "check"),
     ("x", "hide done"), ("esc", "back"),
 ]
 PR_KEYS = [  # while the PRs list has focus
     ("p", "add"), ("enter", "open"), ("space", "state"), ("e", "edit"), ("d", "delete"), ("esc", "back"),
 ]
+FAMILY_KEYS = [("enter", "go to"), ("esc", "back")]  # while the Family list has focus
+EXPLORATION_KEYS = [("enter", "read"), ("?", "ask"), ("esc", "back")]  # while the Explorations list has focus
 # The detail pane is not the list, so here a color may mean a state: the ones forges use for PRs.
 PR_COLORS = {"open": config.PALETTE["green"], "draft": "dim", "merged": config.PALETTE["purple"],
              "closed": config.PALETTE["red"], "": "dim"}
@@ -97,11 +101,42 @@ def short_date(stamp: str) -> str:
         return stamp[:10]
 
 
+TREE_EMPTY = "No families here. Press b on an item to start one: an idea from it, or a step as an item."
 EMPTY = {
-    "past": f"Nothing finished in the last {items.PAST_WINDOW_DAYS} days.",
+    "past": f"Nothing done or dropped in the last {items.PAST_WINDOW_DAYS} days.",
     "now": "Nothing in progress. Press h to see what is next.",
     "later": "Nothing for later. Press n to capture an idea.",
 }
+
+
+def family_trees(all_items: list[Item]) -> list[list[tuple[Item, str, str]]]:
+    """Each family (an item, the items that came from it and theirs) as rows of (item, the connector before
+    its title, the prefix of the lines under it), parent first, children in file order. Items whose `from:`
+    point at each other still show, once."""
+    by_slug = {i.slug: i for i in all_items}
+    kids: dict[str, list[Item]] = {}
+    for i in all_items:
+        if i.from_slug in by_slug and i.from_slug != i.slug:
+            kids.setdefault(i.from_slug, []).append(i)
+    seen: set[str] = set()
+
+    def walk(item: Item, head: str, cont: str, out: list[tuple[Item, str, str]]) -> None:
+        seen.add(item.slug)
+        children = [c for c in kids.get(item.slug, []) if c.slug not in seen]
+        out.append((item, head, cont + ("│ " if children else "  ")))
+        for n, child in enumerate(children):
+            if child.slug not in seen:  # a cycle may have reached it through a sibling
+                last = n == len(children) - 1
+                walk(child, cont + ("└ " if last else "├ "), cont + ("  " if last else "│ "), out)
+
+    families = []
+    roots = [i for i in all_items if i.slug in kids and i.from_slug not in by_slug]
+    for root in roots + [i for i in all_items if i.slug in kids]:  # the second pass picks up the cycles
+        if root.slug not in seen:
+            family: list[tuple[Item, str, str]] = []
+            walk(root, "", "", family)
+            families.append(family)
+    return families
 
 
 def repo_of(item: Item) -> str:
@@ -286,12 +321,19 @@ def seen_key(step: items.Step) -> str:
     return f"{hashlib.sha1(step.text.encode('utf-8')).hexdigest()[:10]}:{int(step.done)}"
 
 
+def seen_keys(item: Item) -> list[str]:
+    """What you saw of an item: its steps (`seen_key`) and its answered explorations (`x<id>`)."""
+    return [seen_key(s) for s in item.steps] + [f"x{e.id}" for e in item.explorations if e.id and e.state == "done"]
+
+
 def news_label(news: dict[str, str] | None) -> str:
-    """`+2 ✓1`: steps added and steps done since you last looked; `new` for an item you never saw."""
+    """`+2 ✓1 1 answer`: steps added and done, and answers that landed, since you last looked; `new` for an
+    item you never saw."""
     if news is None:
         return "new"
-    added, done = sum(n == "new" for n in news.values()), sum(n == "done" for n in news.values())
-    return " ".join(part for part in (f"+{added}" if added else "", f"✓{done}" if done else "") if part)
+    added, done, answers = (sum(n == kind for n in news.values()) for kind in ("new", "done", "answer"))
+    parts = (f"+{added}" if added else "", f"✓{done}" if done else "", plural(answers, "answer") if answers else "")
+    return " ".join(part for part in parts if part)
 
 
 class TextScreen(ModalScreen[str | None]):
@@ -372,6 +414,200 @@ class StepScreen(ModalScreen[tuple[str, str] | None]):
         event.stop()
         text = " ".join(event.value.split())
         self.dismiss((text, self.kind) if text else None)
+
+
+class BranchScreen(ModalScreen[tuple[str, str] | None]):
+    """`b`: a new idea that comes from this item or, with Tab, an open step that becomes an item of its own.
+    Returns (mode, title), mode "idea" or "step"."""
+
+    BINDINGS = [
+        Binding("escape", "dismiss(None)", "cancel"),
+        Binding("tab", "switch_mode", "mode", priority=True),
+    ]
+
+    def __init__(self, title: str, step_text: str | None) -> None:
+        super().__init__()
+        self.title_text = title
+        self.step_text = step_text
+        self.mode = "idea"
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog"):
+            yield Label(f"From “{self.title_text}”", classes="dialog-title")
+            yield Input(placeholder="a short title", select_on_focus=False)
+            yield Static(self.mode_line(), id="mode", classes="dialog-hint")
+
+    def mode_line(self) -> Text:
+        text = Text()
+        modes = [("idea", "new idea")] + ([("step", f"step becomes an item: {self.step_text}")] if self.step_text else [])
+        for mode, label in modes:
+            text.append(f"[{label}]" if mode == self.mode else label, "bold" if mode == self.mode else "dim")
+            text.append("\n")
+        if self.step_text:
+            text.append_text(Text.assemble(("tab", "bold"), (" switches  ", "dim")))
+        return text.append_text(Text.assemble(("enter", "bold"), (" creates  ", "dim"), ("esc", "bold"), (" cancels", "dim")))
+
+    def action_switch_mode(self) -> None:
+        if not self.step_text:
+            return
+        field = self.query_one(Input)
+        self.mode = "step" if self.mode == "idea" else "idea"
+        if self.mode == "step" and not field.value.strip():
+            field.value = self.step_text
+            field.cursor_position = len(field.value)
+        elif self.mode == "idea" and field.value == self.step_text:
+            field.value = ""
+        self.query_one("#mode", Static).update(self.mode_line())
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        title = " ".join(event.value.split())
+        self.dismiss((self.mode, title) if title else None)
+
+
+class AskScreen(ModalScreen[tuple[str | None, str | None] | None]):
+    """`?`: a lens from the config (digits pick), keep-digging when set up, the next questions of the latest
+    answer, or a question typed in the field. Returns (lens, question)."""
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "cancel")]
+
+    def __init__(self, title: str, lenses: dict[str, str], next_questions: list[str], deep_available: bool) -> None:
+        super().__init__()
+        self.title_text = title
+        self.choices: list[tuple[str | None, str | None]] = [(name, None) for name in lenses]
+        labels = [Text.assemble((f"{name:<12} ", "bold"), (question, "dim")) for name, question in lenses.items()]
+        if deep_available:
+            self.choices.append((explore.DEEP, None))
+            labels.append(Text.assemble((f"{explore.DEEP:<12} ", "bold"),
+                                        ("keep-digging, up to 90 minutes (with the question typed below, if any)", "dim")))
+        self.choices += [(None, q) for q in next_questions]
+        labels += [Text.assemble(("→ ", "dim"), q) for q in next_questions]
+        self.labels = labels
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog ask"):
+            yield Label(f"Ask about “{self.title_text}”", classes="dialog-title")
+            yield OptionList(*(Option(Text.assemble((f"{n}  " if n <= 9 else "   ", "dim"), label), id=str(n))
+                               for n, label in enumerate(self.labels, start=1)))
+            yield Input(placeholder="or type your own question", select_on_focus=False)
+            yield Label(key_line([("1-9", "pick"), ("tab", "type"), ("enter", "ask"), ("esc", "cancel")]), classes="dialog-hint")
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).focus()
+
+    def on_key(self, event) -> None:
+        if (event.character and event.character.isdigit() and event.character != "0"
+                and self.query_one(OptionList).has_focus and int(event.character) <= len(self.choices)):
+            event.stop()
+            self.pick(int(event.character) - 1)
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self.pick(int(event.option.id or "1") - 1)
+
+    def pick(self, index: int) -> None:
+        lens, question = self.choices[index]
+        typed = " ".join(self.query_one(Input).value.split())
+        self.dismiss((lens, typed or None) if lens == explore.DEEP else (lens, question))
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        question = " ".join(event.value.split())
+        if question:
+            self.dismiss((None, question))
+
+
+class SparkQuestionsScreen(ModalScreen[list[str] | None]):
+    """`*` when rumo asks before the ideas: one field per question, blank allowed. Enter on the last one sends,
+    Esc leaves the questions waiting. Returns the answers."""
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "later")]
+
+    def __init__(self, direction: str, questions: list[str], answers: list[str]) -> None:
+        super().__init__()
+        self.direction = direction
+        self.questions = questions
+        self.answers = answers
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog spark"):
+            yield Label("Before the ideas", classes="dialog-title")
+            if self.direction:
+                yield Static(self.direction, classes="spark-direction")
+            for n, question in enumerate(self.questions):
+                yield Static(Text(question, "bold"), classes="spark-question")
+                given = self.answers[n] if n < len(self.answers) and isinstance(self.answers[n], str) else ""
+                yield Input(value=given, placeholder="your answer, or leave it blank", select_on_focus=False)
+            yield Label(key_line([("tab", "next"), ("enter", "send"), ("esc", "later")]), classes="dialog-hint")
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        event.stop()
+        fields = list(self.query(Input))
+        n = fields.index(event.input)
+        if n + 1 < len(fields):
+            fields[n + 1].focus()
+        else:
+            self.dismiss([" ".join(f.value.split()) for f in fields])
+
+
+class SparkIdeasScreen(ModalScreen[set[int] | None]):
+    """`*` when the ideas are ready: the direction rumo read, then the ideas. A digit, or space on the highlighted
+    one, throws it away (and back); Enter keeps the others, Esc leaves them waiting. Returns what was thrown away."""
+
+    BINDINGS = [Binding("escape", "dismiss(None)", "later")]
+
+    def __init__(self, direction: str, ideas: list[spark.Idea], titles: dict[str, str]) -> None:
+        super().__init__()
+        self.direction = direction
+        self.ideas = ideas
+        self.titles = titles  # slug -> title of the items the ideas come from
+        self.thrown: set[int] = set()
+
+    def prompt(self, n: int) -> Table:
+        """The number, then the title, the summary and where it comes from, wrapping under the title."""
+        idea, thrown = self.ideas[n], n in self.thrown
+        body = Text.assemble(("✕ " if thrown else "", "dim"), (idea.title, "dim strike" if thrown else "bold"))
+        if idea.summary:
+            body.append(f"\n{idea.summary}", "dim strike" if thrown else "")
+        if source := next((self.titles[s] for s in idea.sources if s in self.titles), ""):
+            body.append(f"\nfrom {source}", "dim")
+        grid = Table.grid(padding=(0, 1))
+        grid.add_column(width=2)
+        grid.add_column(ratio=1)
+        grid.add_row(Text(str(n + 1), "dim"), body)
+        return grid
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="dialog spark"):
+            yield Label("Your direction", classes="dialog-title")
+            yield Static(self.direction or "-", classes="spark-direction")
+            rows: list[Option | None] = []
+            for n in range(len(self.ideas)):  # a rule between them: a blank line would light up with the highlight
+                rows += [None] if rows else []
+                rows.append(Option(self.prompt(n), id=str(n)))
+            yield OptionList(*rows)
+            yield Label(key_line([(f"1-{len(self.ideas)}", "throw away or back"), ("enter", "keep the rest"), ("esc", "later")]),
+                        classes="dialog-hint")
+
+    def on_mount(self) -> None:
+        self.query_one(OptionList).focus()
+
+    def on_key(self, event) -> None:
+        options = self.query_one(OptionList)
+        if event.character and event.character.isdigit() and 1 <= int(event.character) <= len(self.ideas):
+            n = int(event.character) - 1
+        elif event.key == "space" and options.highlighted is not None:
+            n = options.highlighted
+        else:
+            return
+        event.stop()
+        event.prevent_default()
+        self.thrown ^= {n}
+        options.replace_option_prompt_at_index(n, self.prompt(n))
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        event.stop()
+        self.dismiss(set(self.thrown))
 
 
 class PRScreen(ModalScreen[tuple[str, str, str] | None]):
@@ -470,6 +706,61 @@ class PRList(ListView):
         cast(RumoApp, self.app).show_keys()
 
 
+class FamilyList(ListView):
+    BINDINGS = [Binding("enter", "app.go_to_family", "go to")]
+
+    def on_focus(self) -> None:
+        cast(RumoApp, self.app).show_keys("family")
+
+    def on_blur(self) -> None:
+        cast(RumoApp, self.app).show_keys()
+
+
+class ExplorationList(ListView):
+    BINDINGS = [Binding("enter", "app.read_exploration", "read")]
+
+    def on_focus(self) -> None:
+        cast(RumoApp, self.app).show_keys("explorations")
+
+    def on_blur(self) -> None:
+        cast(RumoApp, self.app).show_keys()
+
+
+class ExplorationScreen(Screen[None]):
+    """One exploration, full screen: the question, the answer and the next questions. Esc goes back."""
+
+    BINDINGS = [Binding("escape", "app.pop_screen", "back"), Binding("q", "app.pop_screen", "back", show=False)]
+    CSS = """
+    ExplorationScreen #reader { padding: 1 2; }
+    ExplorationScreen #reader-keys { height: auto; padding: 0 1; }
+    """
+
+    def __init__(self, title: str, exploration: items.Exploration, state: str) -> None:
+        super().__init__()
+        self.text = self.markdown(title, exploration, state)
+
+    @staticmethod
+    def markdown(title: str, e: items.Exploration, state: str) -> str:
+        parts = [f"## {e.question}", f"*{e.when}* · {title}"]
+        if state == "running":
+            parts.append("Still asking… The answer lands here when it is ready.")
+        elif state == "failed":
+            parts.append(f"**Failed:** {e.error or 'stopped before it answered'}\n\nPress `?` on the item to ask again.")
+        else:
+            parts.append(e.answer)
+        if e.next_questions:
+            parts.append("**Next questions** (offered by `?`)\n\n" + "\n".join(f"- {q}" for q in e.next_questions))
+        return "\n\n".join(parts)
+
+    def compose(self) -> ComposeResult:
+        with VerticalScroll(id="reader"):
+            yield Markdown(self.text)
+        yield Static(key_line([("↑↓", "scroll"), ("esc", "back")]), id="reader-keys")
+
+    def on_mount(self) -> None:
+        self.query_one("#reader", VerticalScroll).focus()
+
+
 # ---------- app ----------
 
 
@@ -486,7 +777,7 @@ class RumoApp(App):
     #detail { border: round $secondary-darken-1; padding: 0 1; }
     #header { margin-bottom: 1; }
     .section { text-style: bold; color: $accent; margin-top: 1; }
-    #steps, #prs, #sessions { height: auto; }
+    #steps, #prs, #family, #explorations, #sessions { height: auto; }
     .wrapping { layout: horizontal; }
     .wrapping > .text, #sessions Label { width: 1fr; }
     Markdown { margin: 0; padding: 0; }
@@ -499,6 +790,11 @@ class RumoApp(App):
     .dialog-title { text-style: bold; margin-bottom: 1; }
     .dialog-hint { margin-top: 1; }
     .dialog OptionList, .dialog SelectionList { height: auto; max-height: 20; }
+    .dialog.ask { width: 90; }
+    .dialog.spark { width: 80; }
+    .spark-direction { color: $text-muted; }
+    .spark-question { margin-top: 1; }
+    .dialog.spark OptionList { max-height: 24; }
     """
     BINDINGS = [
         Binding("q", "quit", "quit"),
@@ -506,11 +802,15 @@ class RumoApp(App):
         Binding("1", "view('timeline')", show=False),
         Binding("2", "view('projects')", show=False),
         Binding("3", "view('repos')", show=False),
+        Binding("4", "view('tree')", show=False),
         Binding("h", "next_horizon", "horizon"),
         Binding("s", "status", "status"),
         Binding("g", "group", "group"),
         Binding("t", "tags", "tags"),
         Binding("n", "new_idea", "new idea"),
+        Binding("b", "branch", "branch"),
+        Binding("question_mark", "ask", "ask"),
+        Binding("asterisk", "spark", "spark"),
         Binding("a", "add_step", "add step"),
         Binding("p", "add_pr", "add PR"),
         Binding("x", "toggle_done", "done steps"),
@@ -521,8 +821,16 @@ class RumoApp(App):
     ]
 
     def __init__(self, config_path: Path | None = None, today: date | None = None, gh: prs.Run | None = None,
-                 run_git: git.Run | None = None) -> None:
+                 run_git: git.Run | None = None, spawner: Callable[..., object] = explore.spawn,
+                 spark_spawner: Callable[..., object] = spark.spawn) -> None:
         super().__init__()
+        self.spawner = spawner  # starts `rumo explore` detached; tests pass a recorder
+        self.spark_spawner = spark_spawner  # starts `rumo spark` detached, the same way
+        self.spark_proc: subprocess.Popen | None = None  # the spark started here, until it ends
+        self.spark_from: tuple[str, str] = ("", "")  # spark.json (state, started) when it was started
+        self.spark_seen: tuple[str, str] | None = None  # (state, started) of spark.json at the last look
+        self.spawned: list[subprocess.Popen] = []  # reaped on the poll
+        self.endings: dict[str, str] | None = None  # "<path>#<id>" -> state of each exploration, at the last reload
         self.gh = gh  # asks GitHub about the PRs in the background; None leaves the states as written
         self.run_git = run_git  # asks git what is left in the items' repositories; None says nothing
         self.git_left: dict[str, list[git.Pending]] = {}  # item slug -> what git has left of its work
@@ -536,6 +844,8 @@ class RumoApp(App):
         self.view = "timeline"
         self.hide_done = False  # done steps hidden in the detail of every item (remembered)
         self.shown: list[items.Step] = []  # the steps the list shows, in order
+        self.family: list[str] = []  # the slugs the Family list shows, in order
+        self.explorations: list[items.Exploration] = []  # the ones the Explorations list shows, newest first
         self.horizon = "now"  # one horizon at a time; never remembered, rumo always opens on Now
         self.mtimes: dict[str, float] = {}
         self.viewed: dict[str, list[str]] | None = None  # item path -> its steps when you last looked (state.json)
@@ -553,6 +863,12 @@ class RumoApp(App):
                 yield StepList(id="steps")
                 yield Label("PRs", classes="section", id="prs-title")
                 yield PRList(id="prs")
+                yield Label("Family", classes="section", id="family-title")
+                yield FamilyList(id="family")
+                yield Label("Explorations", classes="section", id="explorations-title")
+                yield ExplorationList(id="explorations")
+                yield Label("Research", classes="section", id="research-title")
+                yield Static(id="research")
                 yield Label("Sessions  (c copies the resume command)", classes="section")
                 yield ListView(id="sessions")
         with Horizontal(id="footer"):
@@ -585,7 +901,7 @@ class RumoApp(App):
         state = config.load_state(self.config_path)
         asked: dict = {}  # each repository and branch once per check
         for item in items.list_items(self.cfg.folder):
-            if item.status == "done":
+            if item.status in items.FINISHED:
                 continue
             key = str(item.path)
             try:
@@ -614,8 +930,9 @@ class RumoApp(App):
 
     def read_mtimes(self) -> dict[str, float]:
         files = list(self.cfg.folder.glob("*.md"))
-        if self.config_path.exists():
-            files.append(self.config_path)
+        for extra in (self.config_path, spark.state_path(self.cfg.folder)):
+            if extra.exists():
+                files.append(extra)
         mtimes = {}
         for path in files:
             try:
@@ -625,19 +942,69 @@ class RumoApp(App):
         return mtimes
 
     def check_changes(self) -> None:
+        self.spawned = [p for p in self.spawned if p.poll() is None]
         if self.read_mtimes() != self.mtimes:
             self.reload()
+        elif self.spark_seen and self.spark_seen[0] == "running":  # a run that dies writes nothing
+            self.announce_spark()
+        if self.spark_proc is not None and self.spark_proc.poll() is not None:
+            proc, self.spark_proc = self.spark_proc, None
+            if proc.returncode and self.spark_key() == self.spark_from:  # it broke before writing a word
+                self.notify(f"Spark failed: it stopped before it started. See {self.config_path.parent / 'explore.log'}.",
+                            severity="warning")
+
+    def spark_key(self) -> tuple[str, str]:
+        data = spark.load(self.cfg.folder)
+        return str(data.get("state", "")), str(data.get("started", ""))
 
     def reload(self) -> None:
         self.cfg = config.load(self.config_path)
+        found = items.list_items(self.cfg.folder)
+        before = {str(i.path): seen_keys(i) for i in found}
+        if synced := items.sync_item_steps(found):  # an `[item]` step follows its item; rumo did it, so no news
+            for path in synced:
+                self.saw(path, before.get(str(path), []))
+            found = items.list_items(self.cfg.folder)
         self.mtimes = self.read_mtimes()
-        self.items = {i.slug: i for i in items.list_items(self.cfg.folder)}
+        self.items = {i.slug: i for i in found}
+        self.announce_endings(found)
+        self.announce_spark()
         if self.viewed is None:
-            self.viewed = {str(i.path): [seen_key(s) for s in i.steps] for i in self.items.values()}
+            self.viewed = {str(i.path): seen_keys(i) for i in self.items.values()}
             self.save_viewed()
         self.build_timeline()
         self.show_detail()
         self.query_one("#legend", Static).update(self.legend())
+
+    def announce_endings(self, found: list[Item]) -> None:
+        """A notice when an exploration ends, started here or not: the answer is ready, or why it failed."""
+        now = datetime.now()
+        states = {f"{i.path}#{e.id}": (i, e, items.exploration_state(e, now, explore.pid_alive))
+                  for i in found for e in i.explorations if e.id}
+        if self.endings is not None:
+            for key, (item, e, state) in states.items():
+                if state != "running" and self.endings.get(key, "running") == "running":
+                    if state == "done":
+                        self.notify(f"Answer ready: “{item.title}”. It is under Explorations.")
+                    else:
+                        self.notify(f"Asking about “{item.title}” failed: {e.error or 'stopped before it answered'}",
+                                    severity="warning")
+        self.endings = {key: state for key, (_, _, state) in states.items()}
+
+    def announce_spark(self) -> None:
+        """A notice when a spark has questions, ideas or failed, and once on start for what still waits. Keyed by
+        state and start time: the answers you write, or a run seen only once it ended, change nothing."""
+        data = spark.load(self.cfg.folder)
+        state, error = spark.current(data, datetime.now(), explore.pid_alive)
+        seen = (state, str(data.get("started", "")))
+        if seen != self.spark_seen and (self.spark_seen is not None or state in ("asking", "ready")):
+            if state == "asking":
+                self.notify("rumo has a question before the ideas. Press *.")
+            elif state == "ready":
+                self.notify(f"{plural(len(spark.ideas_of(data)), 'new idea')}. Press * to see them.")
+            elif state == "failed":
+                self.notify(f"Spark failed: {error}", severity="warning")
+        self.spark_seen = seen
 
     def group_color(self, item: Item) -> str:
         group = self.cfg.groups.get(item.group)
@@ -654,7 +1021,7 @@ class RumoApp(App):
 
     def write(self, operation: Callable[[], object]) -> None:
         item = self.current_item()
-        before = [seen_key(s) for s in item.steps] if item else []
+        before = seen_keys(item) if item else []
         try:
             operation()
         except WriteConflict:
@@ -673,13 +1040,15 @@ class RumoApp(App):
         # One horizon at a time; a filter shows all three, so that no match stays hidden.
         filtering = bool(self.filter_text.strip())
         shown = list(HORIZONS) if filtering else [self.horizon]
-        build = {"timeline": self.timeline_rows, "projects": self.project_rows, "repos": self.repo_rows}[self.view]
+        build = {"timeline": self.timeline_rows, "projects": self.project_rows, "repos": self.repo_rows,
+                 "tree": self.tree_rows}[self.view]
         if not self.items:
             options = [self.message("No items yet. Press n to capture an idea, or run /rumo new in an agent session.")]
         elif filtering:
             options = build(tl, shown) or [self.message("No matches.")]
         else:
-            options = [self.banner(tl), *(build(tl, shown) or [self.message(EMPTY[self.horizon])])]
+            empty = TREE_EMPTY if self.view == "tree" else EMPTY[self.horizon]
+            options = [self.banner(tl), *(build(tl, shown) or [self.message(empty)])]
 
         timeline.clear_options()
         timeline.add_options(options)
@@ -750,6 +1119,22 @@ class RumoApp(App):
             rows += [self.item_option(i, label=label) for i in its]
         return rows
 
+    # Tree: the families with a member in the horizon; the members outside it stay, dim, to keep the shape.
+    def tree_rows(self, tl: items.Timeline, shown: list[str]) -> list[Option]:
+        horizons = self.horizons(tl)
+        inside = {i.slug for horizon in shown for i in horizons[horizon]}
+        rows: list[Option] = []
+        if "past" in shown and tl.older:
+            rows.append(self.older_option(tl.older))
+        for n, family in enumerate(family_trees(list(self.items.values()))):
+            if not any(member.slug in inside for member, _, _ in family):
+                continue
+            if rows:
+                rows.append(Option(Text(""), id=f"gap:{n}", disabled=True))
+            rows += [Option(self.row(member, True, (head, under), faded=member.slug not in inside), id=f"item:{member.slug}")
+                     for member, head, under in family]
+        return rows
+
     @staticmethod
     def block(head: Text, counts: str, gap: bool) -> Table:
         grid = Table.grid(padding=(0, 1), expand=True)
@@ -792,9 +1177,10 @@ class RumoApp(App):
     def item_option(self, item: Item, label: bool = True) -> Option:
         return Option(self.row(item, label), id=f"item:{item.slug}")
 
-    def row(self, item: Item, label: bool) -> Table:
+    def row(self, item: Item, label: bool, tree: tuple[str, str] = ("", ""), faded: bool = False) -> Table:
         """Symbol, project label, title and progress (or the date in Past) on one line; below, the next open
-        steps (`step_lines` of them at most), each saying who acts, then what git has left of the work."""
+        steps (`step_lines` of them at most), each saying who acts, then what git has left of the work.
+        In Tree, `tree` holds the connector before the title and the prefix of the lines below."""
         group = self.cfg.groups.get(item.group)
         grid = Table.grid(padding=(0, 1), expand=True)
         grid.add_column(width=1, no_wrap=True)
@@ -808,18 +1194,22 @@ class RumoApp(App):
         for _ in cells:
             grid.add_column(no_wrap=True)
         grid.add_column(width=6, no_wrap=True, justify="right")
-        if item.status == "done":
+        idle = item.idle_days(self.today or date.today())
+        if item.status in items.FINISHED:
             right = short_date(item.done_at)
+        elif idle is not None:
+            right = f"{idle}d"  # how long the idea has waited for a decision
         else:
             right = f"{sum(s.done for s in item.steps)}/{len(item.steps)}" if item.steps else ""
-        symbol = Text(SHAPES[item.status], "" if item.status == "doing" else "dim")
-        title = Text(display_title(item.title, group.name if group else ""))
+        symbol = Text(SHAPES[item.status], "" if item.status == "doing" and not faded else "dim")
+        title = Text.assemble((tree[0], "dim"), (display_title(item.title, group.name if group else ""),
+                                                 "dim" if faded or item.status == "dropped" or (idle or 0) > IDLE_FADE_DAYS else ""))
         grid.add_row(symbol, *([self.label(group)] if label else []), title, *cells, Text(right, "dim"))
-        pending = [s for s in item.steps if not s.done] if item.status != "done" else []
-        below = [(step.kind, KIND_STYLES.get(step.kind, "dim"), step.text) for step in pending[: self.cfg.step_lines]]
+        pending = [s for s in item.steps if not s.done] if item.status not in items.FINISHED else []
+        below = [(step.kind, KIND_STYLES.get(step.kind, "dim"), step.shown) for step in pending[: self.cfg.step_lines]]
         below += [("git", GIT_STYLE, left.label) for left in self.git_left.get(item.slug, [])]
         for n, (who, style, text) in enumerate(below):
-            line = Text.assemble(("↳ " if n == 0 else "  ", "dim"), (f"{who:<{KIND_WIDTH}}", style), (text, "dim"))
+            line = Text.assemble((tree[1], "dim"), ("↳ " if n == 0 else "  ", "dim"), (f"{who:<{KIND_WIDTH}}", style), (text, "dim"))
             grid.add_row("", *([""] if label else []), line, *[""] * len(cells), "")
         return grid
 
@@ -903,6 +1293,9 @@ class RumoApp(App):
         self.shown = []
         has_prs = bool(item and item.prs)
         pull_requests.display = self.query_one("#prs-title", Label).display = has_prs
+        self.show_family(item)
+        self.show_explorations(item)
+        self.show_research(item)
         if item is None:
             self.query_one("#steps-title", Label).update("Steps")
             header.update(Text("Nothing selected.", "dim"))
@@ -924,14 +1317,14 @@ class RumoApp(App):
         header.update(line)
 
         parts = []
-        for name in ("left off", "context"):
+        for name in ("left off", "context", "notes"):
             if content := item.sections.get(name):
                 parts.append(f"**{name.capitalize()}**\n\n{content}")
         body.update("\n\n".join(parts))
 
         self.shown = [s for s in item.steps if not (self.hide_done and s.done)]
         done = sum(s.done for s in item.steps)
-        news = self.news(item) or {}
+        news = {text: kind for text, kind in (self.news(item) or {}).items() if kind != "answer"}  # answers: Explorations
         hints = [f"{news_label(news)} since you looked"] if news else []
         if done:
             hints.append(f'{done} done hidden · "x" shows them' if self.hide_done else f'{done} done · "x" hides them')
@@ -953,6 +1346,82 @@ class RumoApp(App):
         if item.sessions:
             sessions.index = min(session_index or 0, len(item.sessions) - 1)
 
+    def show_family(self, item: Item | None) -> None:
+        """Where the item came from (`from:`) and the items it led to; Enter goes to one."""
+        rows = self.query_one("#family", ListView)
+        index = rows.index
+        rows.clear()
+        everything = list(self.items.values())
+        parent = items.parent_of(everything, item) if item else None
+        family = ([("↑ from  ", parent)] if parent else []) + [("↓ led to  ", c) for c in (items.children(everything, item) if item else [])]
+        self.family = [member.slug for _, member in family]
+        rows.display = self.query_one("#family-title", Label).display = bool(family)
+        rows.extend(wrapping_row(Text(arrow, "dim"), Text.assemble(
+            (SHAPES[member.status], "" if member.status == "doing" else "dim"), " ", member.title,
+        )) for arrow, member in family)
+        if family:
+            self.highlight(rows, index or 0)
+
+    def show_explorations(self, item: Item | None) -> None:
+        """The questions asked about the item, newest first: `Oct 11 · <question>`, then how it went."""
+        rows = self.query_one("#explorations", ListView)
+        index = rows.index
+        rows.clear()
+        self.explorations = list(reversed(item.explorations)) if item else []
+        rows.display = self.query_one("#explorations-title", Label).display = bool(self.explorations)
+        now = datetime.now()
+        news = (self.news(item) or {}) if item else {}
+        for e in self.explorations:
+            state = items.exploration_state(e, now, explore.pid_alive)
+            after = {"running": ("  asking…", "dim italic"), "failed": (f"  failed: {e.error or 'stopped before it answered'}", "red")}
+            mark = ("  new", "bold") if f"x{e.id}" in news else ""
+            rows.append(wrapping_row(Text(f"{short_date(e.when)} · ", "dim"), Text.assemble(e.question, after.get(state, ""), mark)))
+        if self.explorations:
+            self.highlight(rows, index or 0)
+
+    def show_research(self, item: Item | None) -> None:
+        """The files under `<folder>/research/<slug>/`: what ideas-hub and keep-digging left about the item."""
+        shown = self.query_one("#research", Static)
+        folder = self.cfg.folder / "research" / item.slug if item else None
+        try:
+            found = sorted(p for p in folder.iterdir() if not p.name.startswith(".")) if folder else []
+        except OSError:
+            found = []
+        shown.display = self.query_one("#research-title", Label).display = bool(found)
+        if found and folder:
+            names = "\n".join(p.name + ("/" if p.is_dir() else "") for p in found)
+            shown.update(Text.assemble((f"research{os.sep}{folder.name}{os.sep}  (in the rumo folder)\n", "dim"), names))
+
+    def action_go_to_family(self) -> None:
+        """Select the highlighted family member in the list, switching to its horizon."""
+        rows = self.query_one("#family", ListView)
+        if rows.index is not None and rows.index < len(self.family):
+            self.go_to(self.family[rows.index])
+
+    def go_to(self, slug: str) -> None:
+        """Select that item in the list, switching to its horizon, and focus the list."""
+        if (target := self.items.get(slug)) is None:
+            self.notify(f"No item {slug} in {self.cfg.folder}.", severity="warning")
+            return
+        if not self.matches(target):
+            self.query_one("#filter", Input).value = ""
+            self.filter_text = ""
+        self.horizon = HORIZON_OF[target.status]
+        if target.status in items.FINISHED and target not in items.timeline(list(self.items.values()), today=self.today).past:
+            self.show_older = True  # finished before the Past window
+        self.current = target.slug
+        self.build_timeline()
+        self.show_detail()
+        self.query_one("#timeline", OptionList).focus()
+
+    def action_read_exploration(self) -> None:
+        rows = self.query_one("#explorations", ListView)
+        item = self.current_item()
+        if item is None or rows.index is None or rows.index >= len(self.explorations):
+            return
+        e = self.explorations[rows.index]
+        self.push_screen(ExplorationScreen(item.title, e, items.exploration_state(e, datetime.now(), explore.pid_alive)))
+
     @staticmethod
     def pr_row(pr: items.PR) -> ListItem:
         """`● web-app#12  Logout novo  open`, the name linked to the PR."""
@@ -966,8 +1435,8 @@ class RumoApp(App):
         kind = f"[{step.kind}] " if step.kind else ""
         mark = ({"new": "  new", "done": "  done since you looked"}.get(news, ""), "bold")
         if step.done:
-            return wrapping_row(Text(f"[x] {kind}", "dim strike"), Text.assemble((step.text, "dim strike"), mark))
-        return wrapping_row(Text.assemble("[ ] ", (kind, KIND_STYLES.get(step.kind, "dim"))), Text.assemble(step.text, mark))
+            return wrapping_row(Text(f"[x] {kind}", "dim strike"), Text.assemble((step.shown, "dim strike"), mark))
+        return wrapping_row(Text.assemble("[ ] ", (kind, KIND_STYLES.get(step.kind, "dim"))), Text.assemble(step.shown, mark))
 
     # ---------- actions ----------
 
@@ -1023,10 +1492,13 @@ class RumoApp(App):
                 found[step.text] = "new"
             elif done == "1" and "1" not in was[text]:
                 found[step.text] = "done"
+        for e in item.explorations:
+            if e.id and e.state == "done" and f"x{e.id}" not in was:
+                found[f"x{e.id}"] = "answer"
         return found
 
     def mark_viewed(self, item: Item) -> bool:
-        if self.viewed is None or self.viewed.get(str(item.path)) == (keys := [seen_key(s) for s in item.steps]):
+        if self.viewed is None or self.viewed.get(str(item.path)) == (keys := seen_keys(item)):
             return False
         self.viewed[str(item.path)] = keys
         self.save_viewed()
@@ -1035,7 +1507,7 @@ class RumoApp(App):
     def saw(self, path: Path, before: list[str]) -> None:
         """What you just changed yourself is no news: it joins what you have seen of the item."""
         try:
-            after = [seen_key(s) for s in items.load(path).steps]
+            after = seen_keys(items.load(path))
         except (OSError, ValueError):
             return
         seen = self.viewed.get(str(path)) if self.viewed is not None else None
@@ -1065,7 +1537,7 @@ class RumoApp(App):
     def show_keys(self, focus: str = "") -> None:
         """The footer: the keys of the list that has focus ("steps", "prs"), and `x` saying what it does now."""
         done = ("x", "show done" if self.hide_done else "hide done")
-        shown = {"steps": STEP_KEYS, "prs": PR_KEYS}.get(focus, KEYS)
+        shown = {"steps": STEP_KEYS, "prs": PR_KEYS, "family": FAMILY_KEYS, "explorations": EXPLORATION_KEYS}.get(focus, KEYS)
         self.query_one("#keys", KeyBar).show([done if key == "x" else (key, label) for key, label in shown])
 
     def action_toggle_step(self) -> None:
@@ -1074,6 +1546,9 @@ class RumoApp(App):
         if item is None or index is None or index >= len(self.shown):
             return
         step = self.shown[index]
+        if step.kind == items.ITEM_KIND:
+            self.notify("This step follows its own item: it is checked when that item is done.")
+            return
         self.write(lambda: items.toggle_step(item, step))
 
     def focused_step(self) -> tuple[Item, int] | None:
@@ -1104,8 +1579,8 @@ class RumoApp(App):
         item = self.current_item()
         if item is None:
             return
-        if item.status == "done":
-            self.notify("This item is done. Reopen it first (s), then add the step.", severity="warning")
+        if item.status in items.FINISHED:
+            self.notify(f"This item is {item.status}. Reopen it first (s), then add the step.", severity="warning")
             return
         focused = self.focused_step()
         after = self.shown[focused[1]] if focused else None
@@ -1125,6 +1600,9 @@ class RumoApp(App):
             return
         item, index = focused
         step = self.shown[index]
+        if step.kind == items.ITEM_KIND:
+            self.go_to(step.target)
+            return
 
         def edited(answer: tuple[str, str] | None) -> None:
             if answer and answer != (step.text, step.kind):
@@ -1228,8 +1706,14 @@ class RumoApp(App):
         choices = [(s, status_text(s)) for s in items.STATUSES]
 
         def chosen(status: str | None) -> None:
-            if status and status != item.status:
+            if status == "dropped" and status != item.status:
+                self.push_screen(TextScreen(f"Why drop “{item.title}”?", "the reason, kept in Left off"), dropped)
+            elif status and status != item.status:
                 self.write(lambda: items.set_status(item, status))
+
+        def dropped(reason: str | None) -> None:
+            if reason:  # no reason, no drop: it is what stops the idea from coming back unexamined
+                self.write(lambda: items.set_status(item, "dropped", reason=reason))
 
         self.push_screen(ChoiceScreen(f"Status of “{item.title}”", choices, item.status), chosen)
 
@@ -1325,12 +1809,126 @@ class RumoApp(App):
 
         self.push_screen(TextScreen("New idea", "a short title"), created)
 
+    def action_ask(self) -> None:
+        """Ask Claude Code about the item, in the background: the answer lands under Explorations."""
+        item = self.current_item()
+        if item is None:
+            return
+        if not explore.available(self.cfg.explore_command):
+            self.notify(f"Claude Code was not found ({self.cfg.explore_command}). Set explore_command in {self.config_path}.",
+                        severity="warning")
+            return
+        now = datetime.now()
+        if any(items.exploration_state(e, now, explore.pid_alive) == "running" for e in item.explorations):
+            self.notify("Still asking about this item. The answer lands under Explorations.", severity="warning")
+            return
+        latest = next((e for e in reversed(item.explorations) if e.state == "done"), None)
+        deep = bool(self.cfg.keep_digging) and explore.available(self.cfg.keep_digging)
+
+        def chosen(answer: tuple[str | None, str | None] | None) -> None:
+            if not answer:
+                return
+            try:
+                started = self.spawner(self.config_path, item.slug, *answer)
+            except OSError as e:
+                self.notify(f"Could not start rumo explore: {e}", severity="error")
+                return
+            if isinstance(started, subprocess.Popen):
+                self.spawned.append(started)
+            self.notify(f"Asking about “{item.title}”… The answer lands under Explorations.")
+
+        self.push_screen(AskScreen(item.title, self.cfg.lenses, latest.next_questions if latest else [], deep), chosen)
+
+    def action_spark(self) -> None:
+        """New ideas from the ones you have, read by Claude Code in the background; questions first if it needs."""
+        data = spark.load(self.cfg.folder)
+        state, _ = spark.current(data, datetime.now(), explore.pid_alive)
+        if state == "running" or (self.spark_proc is not None and self.spark_proc.poll() is None):
+            self.notify("Still reading your ideas. A notice comes when it is done.")
+        elif state == "asking":
+            def answered(answers: list[str] | None) -> None:
+                if answers is not None:
+                    spark.answer(self.cfg.folder, answers)
+                    self.start_spark()
+
+            answers = data.get("answers")
+            self.push_screen(SparkQuestionsScreen(str(data.get("direction") or ""), spark.questions_of(data),
+                                                  answers if isinstance(answers, list) else []), answered)
+        elif state == "ready":
+            ideas = spark.ideas_of(data)
+            titles = {i.slug: i.title for i in self.items.values()}
+            self.push_screen(SparkIdeasScreen(str(data.get("direction") or ""), ideas, titles),
+                             lambda thrown: self.keep_ideas(ideas, thrown))
+        elif not spark.readable(list(self.items.values())):
+            self.notify("No ideas to read yet. Press n to note one.")
+        else:
+            self.start_spark()
+
+    def start_spark(self) -> None:
+        if not explore.available(self.cfg.explore_command):
+            self.notify(f"Claude Code was not found ({self.cfg.explore_command}). Set explore_command in {self.config_path}.",
+                        severity="warning")
+            return
+        before = self.spark_key()
+        try:
+            started = self.spark_spawner(self.config_path)
+        except OSError as e:
+            self.notify(f"Could not start rumo spark: {e}", severity="error")
+            return
+        if isinstance(started, subprocess.Popen):
+            self.spawned.append(started)
+            self.spark_proc, self.spark_from = started, before
+        self.notify("Reading your ideas…")
+
+    def keep_ideas(self, ideas: list[spark.Idea], thrown: set[int] | None) -> None:
+        """Enter on the ideas: the ones not thrown away join Later, unread; the others never come back."""
+        if thrown is None:
+            return
+        created = spark.keep(self.cfg.folder, list(self.items.values()), ideas, thrown)
+        self.notify(f"{plural(len(created), 'idea')} added to Later." if created
+                    else "Nothing added. Those ideas will not be suggested again.")
+        if created:  # selected before the reload, or its highlight would land after go_to's and win
+            self.current, self.horizon = created[0].stem, "later"
+        self.reload()
+        if created:
+            self.go_to(created[0].stem)
+
+    def action_branch(self) -> None:
+        """A new idea from this item, or its next open step (the highlighted one in Steps) as an item."""
+        item = self.current_item()
+        if item is None:
+            return
+        focused = self.focused_step()
+        candidates = [self.shown[focused[1]]] if focused else item.steps
+        step = next((s for s in candidates if not s.done and s.kind != items.ITEM_KIND), None)
+        if item.status in items.FINISHED:
+            step = None
+
+        def chosen(answer: tuple[str, str] | None) -> None:
+            if not answer:
+                return
+            mode, title = answer
+            created: list[Path] = []
+            if mode == "step" and (picked := step) is not None:
+                self.write(lambda: created.append(items.step_to_item(item, picked, title, now=datetime.now())))
+            else:
+                self.write(lambda: created.append(items.create_idea(
+                    self.cfg.folder, title, now=datetime.now(), group=item.group, tags=item.tags, parent=item.slug)))
+            if created:
+                if self.viewed is not None:
+                    self.viewed[str(created[0])] = []
+                    self.save_viewed()
+                self.reload()
+                self.go_to(created[0].stem)
+
+        self.push_screen(BranchScreen(item.title, step.shown if step else None), chosen)
+
     def action_edit(self) -> None:
         item = self.current_item()
         if item is None:
             return
         editor = os.environ.get("VISUAL") or os.environ.get("EDITOR") or ("notepad" if os.name == "nt" else "vi")
-        before = [seen_key(s) for s in item.steps]
+        before = seen_keys(item)
         with self.suspend():
             subprocess.run([*shlex.split(editor, posix=os.name != "nt"), str(item.path)], check=False)
         self.saw(item.path, before)

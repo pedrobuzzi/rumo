@@ -1,7 +1,7 @@
-"""The `rumo` command: opens the Timeline.
+"""The `rumo` command: opens the Timeline; `rumo idea` notes an idea from any shell.
 
 Other subcommands exist for the agent and the hook, and are kept out of
-the help on purpose: `hook`, `index`, `now`, `sessions`, `path`, `group-add`, `ask-to-track`, `--version`.
+the help on purpose: `hook`, `index`, `now`, `sessions`, `path`, `group-add`, `ask-to-track`, `explore`, `spark`, `--version`.
 `index` reads the session id itself: Claude Code refuses to run a command that expands a variable
 without asking, so the skill only ever runs `rumo ...`.
 """
@@ -14,7 +14,8 @@ import sys
 
 USAGE = """rumo: your agent forgets, rumo doesn't.
 
-  rumo        open the Timeline
+  rumo                  open the Timeline
+  rumo idea "<title>"   note an idea, and see similar items (--group <key> to file it)
 
 Inside an AI agent session, type /rumo for the agent commands.
 """
@@ -52,6 +53,12 @@ def main(argv: list[str] | None = None) -> None:
         _group_add(args[1:])
     elif command == "ask-to-track":
         _ask_to_track(args[1:])
+    elif command == "explore":
+        _explore(args[1:])
+    elif command == "spark":
+        _spark(args[1:])
+    elif command == "idea":
+        _idea(args[1:])
     elif command in ("-V", "--version"):
         from importlib.metadata import version
 
@@ -191,6 +198,89 @@ def _ask_to_track(rest: list[str]) -> None:
     path = config.load().path
     config.set_ask_to_track(path, rest[0] == "true")
     print(f"ask_to_track = {rest[0]} in {path}")
+
+
+def _idea(rest: list[str]) -> None:
+    """`rumo idea "<title>" [--group <key>]`: note an idea from any shell, then name up to three similar
+    items, with the reason for the dropped ones, so an idea already turned down is not rediscovered.
+    """
+    from datetime import datetime
+
+    from rumo import config, items
+
+    cfg = config.load()
+    group = ""
+    if rest[:1] in (["-h"], ["--help"]):
+        print('usage: rumo idea "<title>" [--group <key>]')
+        return
+    if rest[:1] and rest[0].startswith("-"):  # a flag, never a title
+        rest = []
+    if len(rest) == 3 and rest[1] == "--group" and rest[2] in cfg.groups:
+        group = rest[2]
+    elif len(rest) != 1:
+        groups = f" (groups: {', '.join(cfg.groups)})" if cfg.groups else ""
+        print(f'usage: rumo idea "<title>" [--group <key>]{groups}', file=sys.stderr)
+        raise SystemExit(2)
+    title = " ".join(rest[0].split())
+    if not title:
+        print('usage: rumo idea "<title>" [--group <key>]', file=sys.stderr)
+        raise SystemExit(2)
+    found = items.similar(items.list_items(cfg.folder), title)
+    print(items.create_idea(cfg.folder, title, now=datetime.now(), group=group))
+    for item in found:
+        reason = item.sections.get("left off", "") if item.status == "dropped" else ""
+        print(f"similar: {item.title} ({item.status}{': ' + ' '.join(reason.split()) if reason else ''})")
+
+
+def _explore(rest: list[str]) -> None:
+    """`rumo explore <slug> <lens>` or `rumo explore <slug> [deep] --ask "<question>"`: ask about an item and
+    write the answer into it. The Timeline runs it in the background on `?`. Prints `done` or `failed: <reason>`.
+    """
+    from rumo import config, explore, items
+
+    cfg = config.load()
+    lens = question = None
+    if len(rest) == 2 and rest[1] != "--ask":
+        lens = rest[1]
+    elif len(rest) in (3, 4) and rest[-2] == "--ask" and rest[-1].strip() and (len(rest) == 3 or rest[1] == explore.DEEP):
+        lens, question = (rest[1] if len(rest) == 4 else None), rest[-1]
+    else:
+        print('usage: rumo explore <slug> <lens> | rumo explore <slug> [deep] --ask "<question>"', file=sys.stderr)
+        raise SystemExit(2)
+    path = cfg.folder / f"{rest[0]}.md"
+    if not path.is_file():
+        print(f"no item {rest[0]} in {cfg.folder}", file=sys.stderr)
+        raise SystemExit(2)
+    if lens and lens != explore.DEEP and lens not in cfg.lenses:
+        print(f"unknown lens: {lens} (lenses: {', '.join([*cfg.lenses, explore.DEEP])})", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        result = explore.explore(cfg, path, lens=lens, question=question)
+    except (explore.ExploreError, items.WriteConflict) as e:
+        print(f"failed: {e}")
+        raise SystemExit(1) from None
+    print(result)
+    if result != "done":
+        raise SystemExit(1)
+
+
+def _spark(rest: list[str]) -> None:
+    """`rumo spark`: read the ideas and write three new ones, or the questions to ask first, to spark.json.
+    The Timeline runs it in the background on `*`. Prints `asking`, `ready` or `failed: <reason>`.
+    """
+    from rumo import config, spark
+
+    if rest:
+        print("usage: rumo spark", file=sys.stderr)
+        raise SystemExit(2)
+    try:
+        result = spark.spark(config.load())
+    except spark.SparkError as e:
+        print(f"failed: {e}")
+        raise SystemExit(1) from None
+    print(result)
+    if result.startswith("failed"):
+        raise SystemExit(1)
 
 
 if __name__ == "__main__":

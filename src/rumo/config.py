@@ -5,6 +5,12 @@
     tags = ["bug", "feature"]     # fixed list the agent picks from
     ask_to_track = true           # in agent sessions without an item, offer to track them (unset: ask once)
     step_lines = 2                # open steps shown under each item in the list, 1 to 6
+    explore_command = "claude"    # what `?` runs to explore an item (Claude Code)
+    keep_digging = ""             # the keep-digging executable, for the deep lens (unset: no deep lens)
+    deep_iterations = 3
+
+    [lenses]                      # questions `?` offers, in this order; content: any language
+    validar = "How would I validate this in one week, spending little?"
 
     [groups.auth]
     name = "Migração auth"        # content: any language
@@ -43,6 +49,15 @@ PALETTE = {
 
 STEP_LINES = 6
 
+# The questions `?` offers when the config names none. Users rewrite them in their own language.
+DEFAULT_LENSES = {
+    "open": "What is still unclear about this, and which of those doubts matters most?",
+    "pessimistic": "Pessimistic scenario: how does this fail, and what would show it early?",
+    "validate": "What is the cheapest real test to validate this in one week?",
+    "competitors": "Who already does this, what do they charge, and where do they fail?",
+    "smallest": "What is the smallest version that would still solve the problem?",
+}
+
 DEFAULT_TAGS = [
     "bug", "feature", "refactor", "research", "spike", "review",
     "infra", "deploy", "meeting", "docs", "support", "tech-debt",
@@ -65,6 +80,10 @@ class Config:
     groups: dict[str, Group] = field(default_factory=dict)
     ask_to_track: bool | None = None  # None: the user was never asked
     step_lines: int = 2  # open steps under each item in the list, STEP_LINES at most
+    lenses: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_LENSES))
+    explore_command: str = "claude"
+    keep_digging: str = ""  # the keep-digging executable, expanded; "" for none
+    deep_iterations: int = 3
     error: str | None = None
 
 
@@ -102,6 +121,16 @@ def load(path: Path | None = None) -> Config:
         cfg.ask_to_track = ask
     if isinstance(lines := data.get("step_lines"), int) and not isinstance(lines, bool):
         cfg.step_lines = min(max(lines, 1), STEP_LINES)
+    lenses = data.get("lenses")
+    if isinstance(lenses, dict) and (chosen := {str(k): " ".join(v.split()) for k, v in lenses.items()
+                                                if isinstance(v, str) and v.strip()}):
+        cfg.lenses = chosen
+    if isinstance(command := data.get("explore_command"), str) and command.strip():
+        cfg.explore_command = command.strip()
+    if isinstance(digging := data.get("keep_digging"), str) and digging.strip():
+        cfg.keep_digging = os.path.expanduser(digging.strip())  # a command line, quotes and all
+    if isinstance(rounds := data.get("deep_iterations"), int) and not isinstance(rounds, bool):
+        cfg.deep_iterations = min(max(rounds, 1), 10)
     groups = data.get("groups")
     for key, value in (groups.items() if isinstance(groups, dict) else []):
         if isinstance(value, dict):
@@ -225,6 +254,13 @@ def default_text(folder: Path, language: str) -> str:
         f"language = {toml_str(language)}\n"
         f"tags = [{tags}]\n"
         f"step_lines = 2  # open steps shown under each item in the list, 1 to {STEP_LINES}\n"
+        "\n"
+        "# `?` in the Timeline explores an item with Claude Code, in the background. The questions it offers\n"
+        "# (lenses) are yours to rewrite, in any language; keep_digging adds a slow, deep lens.\n"
+        '# explore_command = "claude"\n'
+        '# keep_digging = "~/repo/keep-digging/keep-digging"\n'
+        "# [lenses]\n"
+        '# validate = "What is the cheapest real test to validate this in one week?"\n'
         "\n"
         "# Groups connect related items; each group shows in its own color.\n"
         "# [groups.auth]\n"

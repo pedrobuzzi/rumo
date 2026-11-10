@@ -8,20 +8,23 @@ without rereading a conversation.
 ![rumo Timeline](docs/timeline.svg)
 
 - **Now**: what you are doing or waiting on, with the next step of each item.
-- **Past**: what you finished in the last two weeks (answers "what did I do?" for a standup).
-- **Later**: ideas and paused work, so nothing you meant to do gets lost.
+- **Past**: what you finished, or decided not to do, in the last two weeks (answers "what did I do?" for a standup).
+- **Later**: ideas and paused work, so nothing you meant to do gets lost. Each idea shows how many days
+  it has sat untouched, and fades after 60.
 
 Items can belong to a **group** (a project or initiative), shown as a label with its name on its
 color; on titles and labels, color only ever means the group. One item is one line, plus its next open
 steps (2 by default, `step_lines` in the config), each saying who acts: `manual`, `agent` or `waiting`, and
 what git has left of its work (`git`). rumo shows
-one horizon at a time (`h` steps Now, Later, Past), named in a banner atop the list, in three views: the **Timeline**,
-**Projects** (one block per group) and **Repos** (one block per repository of the item's latest
-agent session). The interface is in English; the content (titles, notes, steps) is in your own
+one horizon at a time (`h` steps Now, Later, Past), named in a banner atop the list, in four views: the **Timeline**,
+**Projects** (one block per group), **Repos** (one block per repository of the item's latest
+agent session) and **Tree** (the families: an item and the ideas and items that came from it). The interface is in English; the content (titles, notes, steps) is in your own
 language.
 
 Nothing leaves your machine. There is no server, no database and no sync with Jira or ClickUp
-(ask your agent to update those if you want).
+(ask your agent to update those if you want). The exceptions are `?` and `*`, which you start yourself:
+`?` sends the item's text, and `*` the text of your ideas (with only the titles of the rest), to Claude
+through your own Claude Code (`claude -p`). Nothing else does.
 
 ## Install
 
@@ -66,18 +69,24 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 
 ## Use
 
-**In the terminal**: `rumo` opens the Timeline.
+**In the terminal**: `rumo` opens the Timeline, and `rumo idea "<title>"` notes an idea from any shell
+(`--group <key>` files it), naming up to three similar items it already knows, with the reason for
+the ones you dropped.
 
 | Key | Action |
 |---|---|
 | ↑ ↓ | move through the list |
-| Tab | switch between the list, steps, PRs and sessions |
-| `v` | next view: Timeline, Projects, Repos (`1` `2` `3` go straight to one; rumo remembers it) |
+| Tab | switch between the list, steps, PRs, family, explorations and sessions |
+| `v` | next view: Timeline, Projects, Repos, Tree (`1` `2` `3` `4` go straight to one; rumo remembers it) |
 | `h` | next horizon: Now, then Later, then Past, then Now again |
-| `s` | change status (1-5 picks directly) |
+| `s` | change status (1-6 picks directly); `6` drops the item and asks why, in one line kept as its Left off |
 | `g` | set the group or create one; inside, `r` renames, `c` recolors and `d` deletes the highlighted group (its items stay) |
 | `t` | toggle tags |
 | `n` | capture a new idea |
+| `b` | branch: a new idea that comes from the selected item (same group and tags); Tab instead turns its next open step (the highlighted one, with the steps focused) into an item of its own, and that step checks itself when the new item is done |
+| `?` | ask Claude about the item, in the background: a lens from the config, one of the next questions of its latest answer, or your own question. The answer lands under Explorations, and a notice says when |
+| `*` | spark: Claude reads your ideas, paused and dropped items, oldest first, and brings 3 new ideas in a line each, with the direction it read in them. Throw any away with its number (or space), Enter adds the others to Later; Esc decides later. Sometimes it asks one or two short questions first |
+| Enter | with the family focused: go to that item; with the explorations focused: read the answer (Esc goes back) |
 | `e` | open the item in `$EDITOR` |
 | `a` | add a step to the selected item, after its open steps (below the highlighted one when the steps have focus); in the dialog, Tab goes through `[agent]`, `[manual]` and `[waiting]` |
 | Enter, shift+↑ ↓, `d`, space | with the steps focused: edit, move, delete (asks first) or check the highlighted step; Esc goes back |
@@ -93,14 +102,17 @@ To get new plugin versions on their own, turn on auto-update for the `rumo` mark
 | Command | What it does |
 |---|---|
 | `/rumo new` | Track this session's work as an item. Looks for a similar idea first and offers to promote it. |
-| `/rumo idea <text>` | Note something for later without leaving the topic. |
+| `/rumo idea <text>` | Note something for later without leaving the topic. It comes from the linked item, and a similar idea you dropped is named with its reason. |
+| `/rumo note <text>` | Keep a fact you learned (a conversation, a price, a number) under the item's Notes. |
 | `/rumo link [item]` | Continue an existing item in this session. |
 | `/rumo now` | List what is in progress, with the next step of each. |
 | `/rumo find <text>` | Search past, current and future items. |
 | `/rumo status` | Show where you left off on the linked item. |
 | `/rumo step <text>` | Add a step to the linked item, or to the item it belongs to when none is linked. |
 | `/rumo park [reason]` | Pause the item with an accurate "Left off" and stop updating it here. |
-| `/rumo done` | Finish the item (checks the steps, asks first). |
+| `/rumo drop [reason]` | Drop the item for good, keeping why. |
+| `/rumo done` | Finish the item (checks the steps, asks first, and offers what is left as ideas). |
+| `/rumo ideas [30d]` | Review the ideas idle for a month: one plan to keep, drop, start or merge each, applied on your yes. |
 | `/rumo unlink` | Stop updating the item from this session. |
 | `/rumo sessions [7d]` | Catch up on the sessions open or active since the last review: create or update their items. |
 
@@ -130,8 +142,24 @@ gets its items back at once. `/clear` starts a new, unlinked session; `claude --
 old one up again.
 
 Steps added or done since you last looked at an item are marked until you move on to another one:
-`+2 ✓1` in the list, `new` and `done since you looked` in its detail. An item that appeared since then
-says `new`. What you change yourself, in the Timeline or with `e`, is never news.
+`+2 ✓1` in the list, `new` and `done since you looked` in its detail. An answer from `?` that landed
+says `1 answer`. An item that appeared since then says `new`. What you change yourself, in the
+Timeline or with `e`, is never news.
+
+`?` runs `claude -p` in the background, away from your CLAUDE.md, plugins and hooks, with web search
+and nothing else, for up to 10 minutes; closing the Timeline does not stop it. The answer (about 350
+words, citing its sources, in your language) ends with three next questions, which `?` offers the next
+time. One question runs at a time per item; one that fails says why and can be asked again. With
+`keep_digging` set in the config (a deep-research script called with `-q <question file> -o <folder>
+-n <rounds>`), a `deep` lens runs it for up to 90 minutes, keeping its raw output in `research/<item>/`
+next to your items.
+
+`*` runs the same way, for up to 10 minutes, and a notice says when the ideas (or its questions) are
+ready. Its ideas cross yours, move them somewhere else, or stay close to where you are heading, after
+a quick web search that they answer a real need. A kept idea comes `from:` the idea it builds on, in
+its group, with its one-line summary as Context, so `?`, `b` and `s` work on it like on any other. The
+ones you throw away are remembered and never suggested again. All of it lives in `spark.json`, next
+to your items.
 
 You can add, edit, move, check and delete steps in the Timeline too. On your next message, a linked
 session is told which steps changed since its last answer, so it neither redoes nor re-adds them, and
@@ -190,7 +218,11 @@ Users land on a protected page after logging out.
 - 2026-10-11 10:08 | web-app (main) | 7134aad0-4ba6-4583-9503-c08e98d28270 | /Users/you/repo/web-app
 ```
 
-- Statuses: `idea`, `doing`, `waiting`, `paused`, `done`. `done: <date>` is set when an item is finished.
+- Statuses: `idea`, `doing`, `waiting`, `paused`, `done`, `dropped`. `done: <date>` is set when an item is
+  finished, `dropped: <date>` when it is dropped (its Left off says why).
+- `from: <slug>` names the item this one came from. `## Notes` holds dated facts you learned
+  (`- 2026-10-11 <text>`), `## Explorations` the answers from `?`, and a step that became an item reads
+  `- [ ] [item] <text> → <slug>`. Files about an item (research) go in `research/<slug>/`.
 - Steps say who acts: `[agent]` (the AI can do it), `[manual]` (you do it) or `[waiting]` (someone or
   something else must act first: a reviewer, the App Store, a client). When the first open step is
   `[waiting]`, the agent sets the item to `waiting`.
@@ -211,6 +243,16 @@ tags = ["bug", "feature", "refactor", "research", "spike", "review",
         "infra", "deploy", "meeting", "docs", "support", "tech-debt"]
 ask_to_track = true    # offer rumo in agent sessions without an item; unset until you first answer
 step_lines = 2         # open steps shown under each item in the list, 1 to 6
+explore_command = "claude"   # what `?` runs; a full path when claude is not on PATH
+keep_digging = "~/bin/keep-digging"   # optional: enables the deep lens
+deep_iterations = 3    # keep-digging rounds, 1 to 10
+
+[lenses]               # what `?` offers, in this order (these are the defaults); write them in your language
+open = "What is still unclear about this, and which of those doubts matters most?"
+pessimistic = "Pessimistic scenario: how does this fail, and what would show it early?"
+validate = "What is the cheapest real test to validate this in one week?"
+competitors = "Who already does this, what do they charge, and where do they fail?"
+smallest = "What is the smallest version that would still solve the problem?"
 
 [groups.auth]
 name = "Auth migration"
@@ -218,7 +260,8 @@ color = "blue"         # blue, green, yellow, orange, red, magenta, purple, cyan
 ```
 
 Groups appear in the order of this file in every view. The last view, and when the agent last
-asked about tracking, are remembered in `state.json`, next to `config.toml`.
+asked about tracking, are remembered in `state.json`, next to `config.toml`; `explore.log`, next to
+them, keeps what `?` and `*` run printed.
 
 `RUMO_DIR` and `RUMO_CONFIG` override the folder and the config path.
 

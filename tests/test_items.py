@@ -2,7 +2,7 @@ import os
 import tempfile
 import time
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 
 from rumo import config, items
@@ -235,11 +235,11 @@ class ItemsTest(unittest.TestCase):
 
     def test_index_has_one_compact_line_per_item(self):
         items.create_idea(self.folder, "Cache nas respostas", now=datetime(2026, 10, 14, 9, 0))
-        lines = items.index(items.list_items(self.folder)).splitlines()
+        lines = items.index(items.list_items(self.folder), today=date(2026, 10, 14)).splitlines()
         self.assertEqual(lines, [
             "2026-10-11-redirect-depois-do-logout | doing | Redirect depois do logout | group: auth | tags: bug, frontend"
             " | left off: Ajustar o redirect para a home.",
-            "2026-10-14-cache-nas-respostas | idea | Cache nas respostas",
+            "2026-10-14-cache-nas-respostas | idea | Cache nas respostas | idle: 0d",
         ])
 
     def test_quoted_values_are_read_without_the_quotes(self):
@@ -332,6 +332,23 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(cfg.groups, {})
         self.assertIsNone(cfg.error)
         self.assertEqual(cfg.folder, Path.home() / "rumo")
+
+    def test_exploration_settings_have_defaults_and_lenses_keep_their_order(self):
+        cfg = config.load(self.path)
+        self.assertEqual(list(cfg.lenses), ["open", "pessimistic", "validate", "competitors", "smallest"])
+        self.assertEqual((cfg.explore_command, cfg.keep_digging, cfg.deep_iterations), ("claude", "", 3))
+        self.path.write_text(
+            'explore_command = "/opt/claude"\nkeep_digging = "~/kd/keep-digging"\ndeep_iterations = 5\n'
+            '[lenses]\nvalidar = "Como validar em uma semana?"\nlacunas = "O que ainda está em aberto?"\nruim = 3\n',
+            encoding="utf-8")
+        cfg = config.load(self.path)
+        self.assertEqual(cfg.lenses, {"validar": "Como validar em uma semana?", "lacunas": "O que ainda está em aberto?"})
+        self.assertEqual((cfg.explore_command, cfg.deep_iterations), ("/opt/claude", 5))
+        self.assertEqual(cfg.keep_digging, str(Path.home() / "kd" / "keep-digging"))
+        self.path.write_text("deep_iterations = true\n[lenses]\n", encoding="utf-8")
+        cfg = config.load(self.path)
+        self.assertEqual((cfg.deep_iterations, list(cfg.lenses)[0]), (3, "open"))  # an empty table keeps the defaults
+        self.assertIn("[lenses]", config.default_text(self.root, "en"))
 
     def test_reads_folder_language_tags_and_groups(self):
         self.path.write_text(config.default_text(self.root / "items", "pt-BR"), encoding="utf-8")

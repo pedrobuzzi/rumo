@@ -305,11 +305,11 @@ def block(session: Recorded, all_items: list[items.Item], state: dict, now: date
 
 
 def same_branch(session: Recorded, candidates: list[items.Item], state: dict) -> list[items.Item]:
-    """The items not done whose work happened on this session's repository and branch (not a shared one)."""
+    """The items not finished whose work happened on this session's repository and branch (not a shared one)."""
     if session.branch in prs.SHARED_BRANCHES or session.branch in ("", "-", "HEAD"):
         return []
     here = (prs.repository(session.cwd), session.branch)
-    return [i for i in candidates if i.status != "done" and any(
+    return [i for i in candidates if i.status not in items.FINISHED and any(
         (prs.repository(folder), branch) == here for folder, branch in prs.branches(i, prs.noted_branches(state, str(i.path))))]
 
 

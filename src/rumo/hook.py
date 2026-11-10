@@ -40,7 +40,8 @@ RULES = (
     "later (`- [ ] [agent] ...`, `- [ ] [manual] ...` for what the user does, `- [ ] [waiting] ...` for what "
     "someone or something else must do first, naming who or what), reword steps that changed, and keep the "
     "very next action as the first open step; when that is a `[waiting]` step set `status: waiting`, and "
-    "`doing` again once it no longer is. Never delete an open step "
+    "`doing` again once it no longer is. A `[item] ... → <slug>` step became that item: rumo checks it "
+    "when that item is done, so leave it as is. Never delete an open step "
     "unless the user explicitly asks; switching topics never closes, parks or deletes anything. If the user "
     "starts work that belongs to none of these items, ask once, in one line at the end of your response: "
     "track it as a new item ({create}; this session links to it too), add it as a step to one of these, "
@@ -302,6 +303,18 @@ def changed_since(path: Path, since: datetime | None) -> bool:
 
 
 def stop(cfg: config.Config, session_id: str, payload: dict) -> str:
+    try:
+        return _stop(cfg, session_id, payload)
+    finally:
+        # The agent marks an item done by editing its file: the `[item]` step that points to it follows.
+        # Done last, so it never counts as the agent having reached a linked item.
+        try:
+            items.sync_item_steps(items.list_items(cfg.folder))
+        except Exception:
+            pass
+
+
+def _stop(cfg: config.Config, session_id: str, payload: dict) -> str:
     linked = linked_items(cfg, session_id)
     transcript = payload.get("transcript_path")
     turn = last_turn(Path(transcript)) if transcript else None

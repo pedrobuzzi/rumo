@@ -147,6 +147,15 @@ class StopHookTest(unittest.TestCase):
     def write_state(self, **data) -> None:
         (self.root / "state.json").write_text(json.dumps({"view": "repos", **data}), encoding="utf-8")
 
+    def test_an_item_step_follows_its_item_once_the_agent_marks_it_done(self):
+        parent = self.folder / "2026-10-11-pix.md"
+        parent.write_text("---\ntitle: Pix\nstatus: doing\n---\n\n## Steps\n- [ ] [item] Gerar o QR → 2026-10-12-qr\n",
+                          encoding="utf-8")
+        (self.folder / "2026-10-12-qr.md").write_text("---\ntitle: Gerar o QR\nstatus: done\nfrom: 2026-10-11-pix\n---\n",
+                                                     encoding="utf-8")
+        self.stop("s1")
+        self.assertTrue(items.load(parent).steps[0].done)
+
     # Linked sessions
 
     def test_reminds_a_linked_session_when_work_did_not_reach_its_items(self):
