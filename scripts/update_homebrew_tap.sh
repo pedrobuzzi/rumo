@@ -18,7 +18,7 @@ TAP_REPO="pedrobuzzi/homebrew-tap"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TAP_DIR="$(brew --repository)/Library/Taps/pedrobuzzi/homebrew-tap"
 
-export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_INSTALL_FROM_API=1 HOMEBREW_NO_ENV_HINTS=1
+export HOMEBREW_NO_AUTO_UPDATE=1 HOMEBREW_NO_ENV_HINTS=1
 
 if [ "$DRY_RUN" != "--dry-run" ]; then
   : "${HOMEBREW_TAP_TOKEN:?HOMEBREW_TAP_TOKEN is required to push}"
@@ -52,8 +52,12 @@ if brew trust --help >/dev/null 2>&1; then
   brew trust --formula "$TAP_NAME/rumo"
   trusts=1
 fi
+# The formula's Python, from Homebrew's API like a user's: CI runners have no homebrew/core checkout,
+# so with HOMEBREW_NO_INSTALL_FROM_API (below) a core formula not installed yet cannot be found.
+python="$(grep -o 'depends_on "python@[0-9.]*"' "$TAP_DIR/Formula/rumo.rb" | grep -o 'python@[0-9.]*')"
+brew install --quiet "$python"
 # The package was just uploaded; skip Homebrew's one-day PyPI cooldown for it (its dependencies keep it).
-brew update-python-resources --ignore-main-package-cooldown "$TAP_NAME/rumo"
+HOMEBREW_NO_INSTALL_FROM_API=1 brew update-python-resources --ignore-main-package-cooldown "$TAP_NAME/rumo"
 # In CI, install it on a Python like a real user's (see that script). Only now: the line above runs
 # pip on that same Python, and the legacy .pth breaks it too (users never run it, so that is fine).
 if [ "${CI:-}" = "true" ]; then "$ROOT/scripts/simulate_messy_homebrew_python.sh"; fi
