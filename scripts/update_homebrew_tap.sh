@@ -25,6 +25,7 @@ if [ "$DRY_RUN" != "--dry-run" ]; then
 fi
 
 created_tap=""
+trusts=""  # set once this script trusted the formula (undone by a dry run that made the tap)
 if [ ! -d "$TAP_DIR" ]; then
   # A plain clone works even while the tap repository is still empty (brew tap does not).
   git clone --quiet "https://github.com/$TAP_REPO.git" "$TAP_DIR" 2>/dev/null || git init --quiet -b main "$TAP_DIR"
@@ -34,7 +35,10 @@ cleanup() {
   local status=$?  # keep the script's exit status; the trap must not turn a failure into success
   if [ "$DRY_RUN" = "--dry-run" ]; then
     brew uninstall --quiet "$TAP_NAME/rumo" >/dev/null 2>&1 || true
-    if [ -n "$created_tap" ]; then rm -rf "$TAP_DIR"; fi
+    if [ -n "$created_tap" ]; then
+      if [ -n "$trusts" ]; then brew untrust --formula "$TAP_NAME/rumo" >/dev/null 2>&1 || true; fi
+      rm -rf "$TAP_DIR"
+    fi
   fi
   exit "$status"
 }
@@ -42,6 +46,12 @@ trap cleanup EXIT
 
 mkdir -p "$TAP_DIR/Formula"
 python3 "$ROOT/scripts/homebrew_formula.py" "$URL" "$SHA256" > "$TAP_DIR/Formula/rumo.rb"
+# Homebrew 7 loads formulae from other taps only once trusted. `brew install pedrobuzzi/tap/rumo`
+# trusts it by itself (what users run), but update-python-resources below loads it first.
+if brew trust --help >/dev/null 2>&1; then
+  brew trust --formula "$TAP_NAME/rumo"
+  trusts=1
+fi
 # The package was just uploaded; skip Homebrew's one-day PyPI cooldown for it (its dependencies keep it).
 brew update-python-resources --ignore-main-package-cooldown "$TAP_NAME/rumo"
 # In CI, install it on a Python like a real user's (see that script). Only now: the line above runs

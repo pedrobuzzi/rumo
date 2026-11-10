@@ -59,7 +59,8 @@ system language.
   npx skills add pedrobuzzi/rumo
   ```
 
-**Update**: `uv tool upgrade rumo-cli` (or `pipx upgrade rumo-cli`, `brew upgrade rumo`), and
+**Update**: `uv tool upgrade rumo-cli` (or `pipx upgrade rumo-cli`, `brew upgrade pedrobuzzi/tap/rumo`: the full
+name lets Homebrew 7 trust the tap's formula), and
 `/plugin marketplace update rumo` in Claude Code, then `/reload-plugins` in sessions already open.
 To get new plugin versions on their own, turn on auto-update for the `rumo` marketplace in `/plugin`
 (Marketplaces tab); the `rumo` command updates with your package manager.
