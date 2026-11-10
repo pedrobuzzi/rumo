@@ -344,7 +344,7 @@ class ConfigTest(unittest.TestCase):
         cfg = config.load(self.path)
         self.assertEqual(cfg.lenses, {"validar": "Como validar em uma semana?", "lacunas": "O que ainda está em aberto?"})
         self.assertEqual((cfg.explore_command, cfg.deep_iterations), ("/opt/claude", 5))
-        self.assertEqual(cfg.keep_digging, str(Path.home() / "kd" / "keep-digging"))
+        self.assertEqual(cfg.keep_digging, os.path.expanduser("~/kd/keep-digging"))  # mixed slashes on Windows
         self.path.write_text("deep_iterations = true\n[lenses]\n", encoding="utf-8")
         cfg = config.load(self.path)
         self.assertEqual((cfg.deep_iterations, list(cfg.lenses)[0]), (3, "open"))  # an empty table keeps the defaults

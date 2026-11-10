@@ -13,6 +13,8 @@ NOW = datetime(2026, 11, 5, 14, 10)
 
 FAKE_CLAUDE = r'''
 import json, os, sys, time
+sys.stdin.reconfigure(encoding="utf-8")  # like Claude Code: UTF-8 in and out, whatever the locale
+sys.stdout.reconfigure(encoding="utf-8")
 prompt = sys.stdin.read()
 if os.environ.get("FAKE_LOG"):
     with open(os.environ["FAKE_LOG"], "w", encoding="utf-8") as f:
