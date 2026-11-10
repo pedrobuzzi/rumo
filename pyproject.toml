@@ -1,6 +1,6 @@
 [project]
 name = "rumo-cli"
-version = "0.6.0"
+version = "0.6.1"
 description = "Your agent forgets, rumo doesn't: what each AI agent session did and what is left, in Markdown files and a terminal Timeline"
 readme = "README.md"
 requires-python = ">=3.11"
